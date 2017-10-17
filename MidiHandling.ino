@@ -1,18 +1,21 @@
 void HandleNoteOn(byte channel, byte note, byte velocity) {
 	notecounter++;
 	noteFreq = mtof(float(note));
-	aSinFreq = noteFreq;// +offsetFreq;
+	aSinFreq = noteFreq;// +lfoOutput;
 	aSin.setFreq(aSinFreq);
 	envelope.noteOn();
-	FMenvelope.noteOn();
+	//MODenvelope.noteOn();
 	digitalWrite(LED, HIGH);
+	lastNote = note;
 }
 
 void HandleNoteOff(byte channel, byte note, byte velocity) {
 	notecounter--;
-	envelope.noteOff();
-	FMenvelope.noteOff();
-	digitalWrite(LED, LOW);
+	if (note == lastNote) { //only turn voice off if it was the last note to be pushed that was released
+		envelope.noteOff();
+		//MODenvelope.noteOff();
+		digitalWrite(LED, LOW);
+	}
 }
 
 void usbmidiprocessing()

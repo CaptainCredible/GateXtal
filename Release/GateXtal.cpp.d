@@ -36,4 +36,5 @@ D:\Users\Stoodio\ 2nd\AppData\Local\Temp\VMBuilds\GateXtal\arcore_leonardo\Relea
  D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi/tables/saw2048_int8.h \
  D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi/tables/triangle2048_int8.h \
  D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi/tables/square_analogue512_int8.h \
- D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi/tables/sin512_int8.h
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi/tables/sin512_int8.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi/tables/brownnoise8192_int8.h
