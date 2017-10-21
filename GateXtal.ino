@@ -10,8 +10,12 @@
 #include <Oscil.h> // oscillator template
 #include <mozzi_midi.h>
 #include <ADSR.h>
-#include <AutoMap.h> // maps unpredictable inputs to a range
+//#include <AutoMap.h> // maps npredictable inputs to a range
 #include <LowPassFilter.h>
+#include <mozzi_rand.h>
+#include <Line.h>
+#include <IntMap.h>
+const IntMap invert(0, 1024, 1024, 0);
 
 //TABLES
 #include <tables/cos2048_int8.h> // sine table for oscillator
@@ -21,6 +25,9 @@
 #include <tables/square_analogue512_int8.h> // square table for oscillator
 #include <tables/sin512_int8.h> //lofi sine for LFO
 #include <tables/brownnoise8192_int8.h> // recorded audio wavetable
+
+
+Line <Q16n16> aInterpolate;
 
 int LEDS[4] = { 14,15,2,3 };
 //int BUTTONS[5] = { 8,7,6,5,4 };
@@ -36,7 +43,7 @@ int notecounter = 0; //keep track of number of playing notes
 const byte NOTEON = 0x09;
 const byte NOTEOFF = 0x08;
 int jitterfreq = 0;
-byte pageState = 0;
+byte pageState = 1;
 float noteFreq = 0; //value to store current root freq of note
 char lfoOutput = 0; //value to store current offset from root
 //float lfoOutput = 0; //value to store current offset from root
@@ -47,11 +54,18 @@ byte waveformselect = 0;
 byte lastNote = 0;
 //float modToFMIntensity = 0;
 //float FMENVval = 0; //NOT USED
-float offsetDepth = 0;
+float modDepth = 0;
 float freeq = 0;
 bool offsetOn = false;
 byte lfoDest = 0;
 byte lpfCutoff = 100;
+byte lpfCutoffMod = 0;
+float PitchOffset = 0;
+byte LFOWaveSelect = 0;
+unsigned long rndTimer = 0;
+long int rndFreq = 0;
+Q16n16 HDlfoOutputBuffer = 0; //this is a big type for slew manipulation
+
 
 #define ARCADEBUTTON 16
 #define LED 10 // shows if MIDI is being recieved, is also available as a gate output
@@ -72,7 +86,9 @@ const int MAX_INTENSITY = 10;
 MIDI_CREATE_DEFAULT_INSTANCE();
 
 // use #define for CONTROL_RATE, not a constant
+
 #define CONTROL_RATE 128// powers of 2 please
+
 //#define CONTROL_RATE 256// powers of 2 please
 
 // audio sinewave oscillator
@@ -80,7 +96,7 @@ Oscil <COS2048_NUM_CELLS, AUDIO_RATE> aSin(COS2048_DATA);   //declare Oscillator
 Oscil <COS2048_NUM_CELLS, AUDIO_RATE> aMod(COS2048_DATA);	//declare Modulator
 Oscil <SIN512_NUM_CELLS, CONTROL_RATE> LFO(SIN512_DATA);    //LFO
 
-AutoMap kMapIntensity(0, 1023, MIN_INTENSITY, MAX_INTENSITY);
+//AutoMap kMapIntensity(0, 1023, MIN_INTENSITY, MAX_INTENSITY);
 
 // envelope generator
 ADSR <CONTROL_RATE, AUDIO_RATE> envelope;					//declare AMP env
@@ -91,6 +107,7 @@ LowPassFilter lpf;
 
 
 void setup() {
+	randSeed(); // fresh random
 	pinMode(LED, OUTPUT);
 	MIDI.setHandleNoteOn(HandleNoteOn);  // This is where we'll handle Hardware MIDI noteons (Put only the name of the function) 
 	MIDI.setHandleNoteOff(HandleNoteOff);  // This is where well handle hardware midi noteoffs
@@ -105,7 +122,6 @@ void setup() {
 	//MODenvelope.setTimes(100, 200, 100000, 200); // 10000 is so the note will sustain 10 seconds unless a noteOff comes
 	aSin.setFreq(440); // default frequency
 	startMozzi(CONTROL_RATE);
-	//startMozzi(AUDIO_RATE);
 	Serial.begin(9600);
 
 	for (int i = 0; i < 5; i++) {
@@ -189,6 +205,8 @@ void updateControl() {
 				fm_intensity = (float(val));// *FMenvelope.next();
 				break;
 			case 1:
+				rndFreq = (val*-1 +1024)<<5; //invert and scale down
+
 				freeq = val;
 				LFO.setFreq(freeq / 50);
 				//CONTROL LFO RATE
@@ -197,9 +215,9 @@ void updateControl() {
 				//Serial.println(modToFMIntensity);
 				break;
 			case 2:
-				envelope.setAttackTime(val + 10);
-				//Serial.print("ATK ");
-				//Serial.println(val+10);
+				envelope.setAttackTime(val + 18);
+				Serial.print("ATK ");
+				Serial.println(val+18);
 				break;
 			case 3:
 				//MODenvelope.setAttackTime(val+10);
@@ -239,8 +257,8 @@ void updateControl() {
 			case 1:
 				//CONTROL LFO DEPTH BIPOLAR M8
 				freeq = val;
-				offsetDepth = freeq / 1000;
-				offsetOn = offsetDepth;
+				modDepth = freeq / 1000;
+				offsetOn = modDepth;
 				//Serial.println(offsetOn);
 				break;
 			case 2:
@@ -262,15 +280,15 @@ void updateControl() {
 		int val = mozziRaw[attackKnob];
 		if (buttStates[BUTTON2]) {
 			jitterfreq = val;
-			lfoOutput = (float(jitterfreq) - 512);
-			if (lfoOutput > -deadzone && lfoOutput < deadzone) {		//if we are in the deadzone
-				lfoOutput = 0;											//set value to zero
+			PitchOffset = (float(jitterfreq) - 512);
+			if (PitchOffset > -deadzone && PitchOffset < deadzone) {		//if we are in the deadzone
+				PitchOffset = 0;											//set value to zero
 			}
-			else if (lfoOutput <= -deadzone) {      //if its below lower deadzone
-				lfoOutput = lfoOutput + deadzone;  //add deadzone to it so it starts from 0
+			else if (PitchOffset <= -deadzone) {      //if its below lower deadzone
+				PitchOffset = PitchOffset + deadzone;  //add deadzone to it so it starts from 0
 			}
 			else {									//if none of above cases apply, it means we are above deadzone
-				lfoOutput = lfoOutput - deadzone;  //subtract deadzone from it so it starts from 0
+				PitchOffset = PitchOffset - deadzone;  //subtract deadzone from it so it starts from 0
 			}
 		}
 		else {
@@ -278,12 +296,12 @@ void updateControl() {
 			case 0:
 				mod_ratio = val >> 7;
 
-				//Serial.println(lfoOutput);
+				//Serial.println(PitchOffset);
 				break;
 
-			case 1:
+			case 1: 
 				//CONTROL LFO DEST
-				lfoDest = val >> 8;
+				lfoDest = val >> 8;   //4 different Destinations
 				break;
 			case 2:
 				envelope.setSustainLevel(val);
@@ -318,7 +336,12 @@ void updateControl() {
 			break;
 
 		case 1:
-			//CONTROL LFO TARGET
+			if (val < 512) {
+				LFOWaveSelect = 0;
+			}
+			else {
+				LFOWaveSelect = 1;
+			}
 			break;
 		case 2:
 			envelope.setReleaseTime(mozziRaw[releaseKnob]);
@@ -332,34 +355,82 @@ void updateControl() {
 		oldMozziRaw[releaseKnob] = mozziRaw[releaseKnob];
 	}
 
+	    //////////////////    /////			   /////
+	    //////////////////    /////			  /////
+	    /////				  /////			 /////
+		/////				   /////        /////
+		/////				   /////       /////
+		/////					/////     /////
+		/////					 /////   /////
+		/////					  ///// /////
+		//////////////////		   /////////
+		//////////////////			//////
 
 	//HANDLE INTERNAL "CV"
 	envelope.update();
 	//Serial.println(LFO.next());
 
-	//lfoOutput = lfoOutput;// *offsetDepth;
+	//lfoOutput = lfoOutput;// *modDepth;
 	//MODenvelope.update(); //WIP
-	//Serial.println(offsetDepth);
+	//Serial.println(modDepth);
 	if (offsetOn) {
-
-		if (lfoDest == 0) {
+		if (LFOWaveSelect == 0) {
 			lfoOutput = LFO.next();
-			aSinFreq = noteFreq + (lfoOutput * offsetDepth);
+		}
+		else {
+			//RANDOM
+			
+			if (mozziMicros() - rndTimer > (rndFreq<<3) ) {
+				int lfoOutputBUFFER = rand(0, 244); //if depth adjusts this we can skip a float calc later
+				//int lfoOutputBUFFER = rand(0, mozziRaw[1]); //if depth adjusts this we can skip a float calc later
+				//int slew = ((invert(mozziRaw[3]))>>2)+1; //invert the value and drop it down by two bits and make sure it doesnt go under 1
+				HDlfoOutputBuffer = Q16n0_to_Q16n16(lfoOutputBUFFER);
+				rndTimer = mozziMicros();
+
+			}
+			Q16n16 slew = ((mozziRaw[3] >> 2)*-1) + 256;
+			aInterpolate.set(HDlfoOutputBuffer, slew);
+			Q16n16 interpolatedLfoOutputBUFFER = aInterpolate.next();
+			lfoOutput = Q16n16_to_Q16n0(interpolatedLfoOutputBUFFER) - 128; //scaled back down to int and offset to -128 to 128
+			Serial.println(rndFreq);
+			
+		}
+		
+		if (lfoDest == 0) {
+			
+			aSinFreq = noteFreq + (lfoOutput * modDepth);
 			aSin.setFreq(aSinFreq);
 		}
 		else {
-			aSinFreq = noteFreq + lfoOutput;
+			aSinFreq = noteFreq;
 		}
 
 		if (lfoDest == 1){
-			lfoOutput = LFO.next();
-			lpfCutoff = lfoOutput + 126;
-			lpf.setCutoffFreq(lpfCutoff >> 2);
+			
+
+			int cutoffBuffer = lpfCutoff + (lfoOutput + 126 * modDepth);
+			if (cutoffBuffer < 0) {
+				cutoffBuffer = 0;
+			}
+			else if (cutoffBuffer > 254) {
+				cutoffBuffer = 254;
+			}
+			//lpfCutoff = (lfoOutput + 126)*modDepth;
+			lpf.setCutoffFreq(cutoffBuffer);
+		}
+		if (lfoDest == 2) {
+		
+			//fm_intensity = (float(val));// *FMenvelope.next();
+			fm_intensity = (float((lfoOutput + 128)*modDepth));
+			jitterfreq = 0;
+
 	}
 }
 
 int mod_freq = aSinFreq * mod_ratio;
 aMod.setFreq(mod_freq);
+//Serial.print("aModFREQ = ");
+//Serial.println(aSinFreq);
 
 //lpf.setCutoffFreq(MODenvelope.next());
 
@@ -367,6 +438,10 @@ aMod.setFreq(mod_freq);
 //	Serial.print(MODenvelope.next());
 //	Serial.print("  AMP: ");
 //	Serial.println(envelope.next());
+//Serial.print("FM_INTENSITY = ");
+//Serial.print(fm_intensity);
+//Serial.print("  JITTERFREQ = ");
+//Serial.println(jitterfreq);
 }
 
 
