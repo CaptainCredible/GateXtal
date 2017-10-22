@@ -15,7 +15,7 @@
 #include <mozzi_rand.h>
 #include <Line.h>
 #include <IntMap.h>
-const IntMap invert(0, 1024, 1024, 0);
+//const IntMap invert(0, 1024, 1024, 0);
 
 //TABLES
 #include <tables/cos2048_int8.h> // sine table for oscillator
@@ -114,7 +114,7 @@ void setup() {
 	MIDI.begin(MIDI_CHANNEL_OMNI); // Initiate MIDI communications, listen to all channels
 
 	envelope.setADLevels(255, 240);			// attacks and decays need to be tweaked !!!!!!!!!!!!!!!!!!!!!!!!!!!
-	envelope.setTimes(100, 200, 1000, 200); // 10000 is so the note will sustain 10 seconds unless a noteOff comes
+	envelope.setTimes(100, 200, 65000, 200); // 65000 is so the note will sustain 65 seconds unless a noteOff comes (it's an unsigned int so it will will overflow at 65535)
 
 
 
