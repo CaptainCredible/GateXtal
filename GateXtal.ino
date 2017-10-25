@@ -43,7 +43,7 @@ int notecounter = 0; //keep track of number of playing notes
 const byte NOTEON = 0x09;
 const byte NOTEOFF = 0x08;
 int jitterfreq = 0;
-byte pageState = 1;
+byte pageState = 0;
 float noteFreq = 0; //value to store current root freq of note
 char lfoOutput = 0; //value to store current offset from root
 //float lfoOutput = 0; //value to store current offset from root
@@ -65,6 +65,7 @@ byte LFOWaveSelect = 0;
 unsigned long rndTimer = 0;
 long int rndFreq = 0;
 Q16n16 HDlfoOutputBuffer = 0; //this is a big type for slew manipulation
+byte arcadeNote = 0;
 
 
 #define ARCADEBUTTON 16
@@ -188,6 +189,21 @@ void updateControl() {
 	else if (!buttStates[plusButton] && oldButtStates[plusButton]) {
 		oldButtStates[plusButton] = buttStates[plusButton];	//remember this happened
 	}
+
+	///////////////////////////
+	/// HANDLE ARCADE BUTTON //
+	///////////////////////////
+
+	if (ArcadeState && !oldArcadeState) {								//if Arcedebutton is Pressed
+		arcadeNote = rand(20, 80);
+		HandleNoteOn(1, arcadeNote, 127);
+		oldArcadeState = ArcadeState;
+	}
+	else if (!ArcadeState && oldArcadeState) {
+		HandleNoteOff(1, arcadeNote, 0);
+		oldArcadeState = ArcadeState;
+	}
+
 	//////////////////////
 	//HANDLE FM KNOB    //  1
 	//////////////////////
@@ -197,9 +213,8 @@ void updateControl() {
 	if (mozziRaw[FMknob] != oldMozziRaw[FMknob]) {
 		int val = mozziRaw[FMknob];
 
-		if (ArcadeState) {								//if Arcedebutton is Pressed
-		}
-		else {
+
+
 			switch (pageState) {
 			case 0:
 				fm_intensity = (float(val));// *FMenvelope.next();
@@ -226,7 +241,7 @@ void updateControl() {
 				break;
 
 			}
-		}
+		
 
 		oldMozziRaw[FMknob] = mozziRaw[FMknob];
 	}
@@ -449,7 +464,7 @@ int updateAudio() {
 	long modulation = fm_intensity * aMod.next();
 	//  return aCarrier.phMod(modulation); // phMod does the FM
 
-	char output = (envelope.next() * aSin.phMod(modulation)) >> 9;
+	char output = (envelope.next() * aSin.phMod(modulation)) >> 9;//9 is safe
 	output = lpf.next(output);       //TRY PUTTING THIS INLINE WITH THE REST! THEN TRY LIMITING IT WITH AN IF STATEMENT TO AVOID NASTY CLIPPING ARTEFACTS ??
 	return (int)output;
 
