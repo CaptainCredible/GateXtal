@@ -66,6 +66,9 @@ unsigned long rndTimer = 0;
 long int rndFreq = 0;
 Q16n16 HDlfoOutputBuffer = 0; //this is a big type for slew manipulation
 byte arcadeNote = 0;
+bool knobLock[4] = { true, true, true, true };
+int lockAnchor[4] = { -99,-99,-99,-99 };
+int lockThresh = 50;
 
 
 #define ARCADEBUTTON 16
@@ -108,8 +111,17 @@ LowPassFilter lpf;
 
 
 void setup() {
+	for (int i = 0; i < 5; i++) {
+		pinMode(BUTTONS[i], INPUT_PULLUP);
+	}
+	pinMode(ARCADEBUTTON, INPUT_PULLUP);
+	for (int i = 0; i < 5; i++) {
+		pinMode(LEDS[i], OUTPUT);
+	}
+
+
 	randSeed(); // fresh random
-	pinMode(LED, OUTPUT);
+	//pinMode(LED, OUTPUT);
 	MIDI.setHandleNoteOn(HandleNoteOn);  // This is where we'll handle Hardware MIDI noteons (Put only the name of the function) 
 	MIDI.setHandleNoteOff(HandleNoteOff);  // This is where well handle hardware midi noteoffs
 	MIDI.begin(MIDI_CHANNEL_OMNI); // Initiate MIDI communications, listen to all channels
@@ -123,16 +135,9 @@ void setup() {
 	//MODenvelope.setTimes(100, 200, 100000, 200); // 10000 is so the note will sustain 10 seconds unless a noteOff comes
 	aSin.setFreq(440); // default frequency
 	startMozzi(CONTROL_RATE);
-	Serial.begin(9600);
+	//Serial.begin(9600);
 
-	for (int i = 0; i < 5; i++) {
-		pinMode(BUTTONS[i], INPUT_PULLUP);
-	}
-
-	pinMode(ARCADEBUTTON, INPUT_PULLUP);
-	for (int i = 0; i < 5; i++) {
-		pinMode(LEDS[i], OUTPUT);
-	}
+	
 
 
 	pinMode(LED_BUILTIN_TX, INPUT); // Deactivate RX LED
@@ -144,7 +149,13 @@ void setup() {
 	LFO.setFreq(1);
 }
 
-
+void lockKnobs() {
+	for (int i = 0; i < 4; i++) {
+		lockAnchor[i] = mozziRaw[i];
+		knobLock[i] = true;
+		//Serial.println("KNOBS LOCKED");
+	}
+}
 
 void updateControl() {
 	usbmidiprocessing(); //check for USB midi notes
@@ -152,6 +163,16 @@ void updateControl() {
 
 	for (int i = 0; i < 4; i++) {
 		mozziRaw[i] = mozziAnalogRead(KNOBS[i]); //get knobstates
+		if (knobLock[i]) {                       //if this knob is locked
+			if (mozziRaw[i] > lockAnchor[i] + lockThresh || mozziRaw[i] < lockAnchor[i] - lockThresh) { // if this knob has wandered far enough from the lock anchor, we can start listening to it
+				knobLock[i] = false;
+
+				//Serial.print("Knob nr.");
+				//Serial.print(i);
+				//Serial.println(" was unlocked");
+
+			}
+		}
 	}
 
 	for (int i = 0; i < 5; i++) {
@@ -165,11 +186,12 @@ void updateControl() {
 	}
 	//HANDLE BUTTONS FOR CHANGING PAGE
 	if (buttStates[minusButton] && !oldButtStates[minusButton]) { //if page- button pressed and it wasn't previously pressed
+		lockKnobs();
 		pageState--;
 		digitalWrite(LEDS[(pageState + 1) % 4], LOW);
 		pageState = pageState % 4;
-		Serial.print("page ");
-		Serial.println(pageState);
+		//Serial.print("page ");
+		//Serial.println(pageState);
 		digitalWrite(LEDS[pageState], HIGH);
 		oldButtStates[minusButton] = buttStates[minusButton];	//remember this happened
 	}
@@ -178,11 +200,12 @@ void updateControl() {
 	}
 
 	if (buttStates[plusButton] && !oldButtStates[plusButton]) { //if page- button pressed and it wasn't previously pressed
+		lockKnobs();
 		pageState++;
 		digitalWrite(LEDS[(pageState - 1)], LOW);
 		pageState = pageState % 4;
-		Serial.print("page ");
-		Serial.println(pageState);
+		//Serial.print("page ");
+		//Serial.println(pageState);
 		digitalWrite(LEDS[pageState], HIGH);
 		oldButtStates[plusButton] = buttStates[plusButton];	//remember this happened
 	}
@@ -210,7 +233,7 @@ void updateControl() {
 
 
 
-	if (mozziRaw[FMknob] != oldMozziRaw[FMknob]) {
+	if (mozziRaw[FMknob] != oldMozziRaw[FMknob] && !knobLock[FMknob]) {
 		int val = mozziRaw[FMknob];
 
 
@@ -231,8 +254,8 @@ void updateControl() {
 				break;
 			case 2:
 				envelope.setAttackTime(val + 18);
-				Serial.print("ATK ");
-				Serial.println(val+18);
+				//Serial.print("ATK ");
+				//Serial.println(val+18);
 				break;
 			case 3:
 				//MODenvelope.setAttackTime(val+10);
@@ -251,11 +274,11 @@ void updateControl() {
 	//HANDLE HAXX KNOB    // 2
 	////////////////////////
 	//Serial.println(buttStates[BUTTON1]);
-	if (mozziRaw[h4xxKnob] != oldMozziRaw[h4xxKnob]) {       //if h4xxknob was moved
+	if (mozziRaw[h4xxKnob] != oldMozziRaw[h4xxKnob] && !knobLock[h4xxKnob]) {       //if h4xxknob was moved
 		int val = mozziRaw[h4xxKnob];
 
 		if (buttStates[BUTTON1]) {
-			Serial.print("RES ");
+			//Serial.print("RES ");
 			lpf.setResonance(val >> 2);
 			//waveformselect = mozziRaw[h4xxKnob] >> 8; // 0 - 1024 to 0 - 4
 
@@ -291,7 +314,7 @@ void updateControl() {
 	//////////////////////
 	//HANDLE ATTACK KNOB// 3
 	//////////////////////
-	if (mozziRaw[attackKnob] != oldMozziRaw[attackKnob]) { //if there was a change to attackKnob
+	if (mozziRaw[attackKnob] != oldMozziRaw[attackKnob] && !knobLock[attackKnob]) { //if there was a change to attackKnob
 		int val = mozziRaw[attackKnob];
 		if (buttStates[BUTTON2]) {
 			jitterfreq = val;
@@ -336,7 +359,7 @@ void updateControl() {
 	///////////////////////
 	//HANDLE RELEASE KNOB//  4
 	///////////////////////
-	if (mozziRaw[releaseKnob] != oldMozziRaw[releaseKnob]) { //if there was a change to releaseKnob
+	if (mozziRaw[releaseKnob] != oldMozziRaw[releaseKnob] && !knobLock[releaseKnob]) { //if there was a change to releaseKnob
 		int val = mozziRaw[releaseKnob];
 		switch (pageState) {           //knob does different things depending on pagestate
 
@@ -407,7 +430,7 @@ void updateControl() {
 			aInterpolate.set(HDlfoOutputBuffer, slew);
 			Q16n16 interpolatedLfoOutputBUFFER = aInterpolate.next();
 			lfoOutput = Q16n16_to_Q16n0(interpolatedLfoOutputBUFFER) - 128; //scaled back down to int and offset to -128 to 128
-			Serial.println(rndFreq);
+			//Serial.println(rndFreq);
 			
 		}
 		
