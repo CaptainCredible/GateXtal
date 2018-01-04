@@ -7,8 +7,7 @@
 
  TODO
  SEQ needs to trigger first note when turned on
- Need to check if we are in seqClockType "external", 
- if so, LED needs to be input and all digitalWrite to LED need to be ignored
+ 
 
  */
 
