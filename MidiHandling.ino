@@ -1,3 +1,13 @@
+void writeLED(bool state) {
+	if (seqOn && seqClockType == 1) {
+	}
+	else {
+		digitalWrite(LED, state);
+	}
+
+}
+
+
 void HandleNoteOn(byte channel, byte note, byte velocity) {
 	notecounter++;
 	noteFreq = mtof(float(note));
@@ -5,7 +15,8 @@ void HandleNoteOn(byte channel, byte note, byte velocity) {
 	aSin.setFreq(aSinFreq);
 	envelope.noteOn();
 	//MODenvelope.noteOn();
-	digitalWrite(LED, HIGH);
+	writeLED(true);
+
 	lastNote = note;
 }
 
@@ -14,7 +25,8 @@ void HandleNoteOff(byte channel, byte note, byte velocity) {
 	if (note == lastNote) { //only turn voice off if it was the last note to be pushed that was released
 		envelope.noteOff();
 		//MODenvelope.noteOff();
-		digitalWrite(LED, LOW);
+		writeLED(false);
+		//digitalWrite(LED, LOW);
 	}
 }
 
@@ -26,7 +38,8 @@ void usbmidiprocessing()
 		// IF NOTE ON WITH VELOCITY GREATER THAN ZERO
 		if ((e.type == NOTEON) && (e.m3 > 0)) {
 			jitterfreq = 0;
-			digitalWrite(LED, HIGH);
+			//digitalWrite(LED, HIGH);
+			//writeLED(true);
 			HandleNoteOn(e.m1, e.m2, e.m3);
 			//Serial.println(notecounter);
 

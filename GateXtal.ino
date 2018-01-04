@@ -1,8 +1,16 @@
+
+
 /*
  Name:		GateXtal.ino
  Created:	10/16/2017 9:18:53 AM
  Author:	Daniel Lacey
-*/
+
+ TODO
+ SEQ needs to trigger first note when turned on
+ Need to check if we are in seqClockType "external", 
+ if so, LED needs to be input and all digitalWrite to LED need to be ignored
+
+ */
 
 //LIBRARIES
 #include <MIDI.h>
@@ -27,8 +35,13 @@
 #include <tables/brownnoise8192_int8.h> // recorded audio wavetable
 
 
-Line <Q16n16> aInterpolate;
+byte midiClockDivider = 1;
+byte seqClockType = 0; //0 = internal, 1 = gate in / arcadeStep, 2 = midiClock 
+unsigned int tempo = 120;
+bool seqOn = false;
+byte seqLength = 16;
 
+Line <Q16n16> aInterpolate;
 int LEDS[4] = { 14,15,2,3 };
 //int BUTTONS[5] = { 8,7,6,5,4 };
 int BUTTONS[5] = { 4,5,6,7,8 };
@@ -129,8 +142,6 @@ void setup() {
 	envelope.setADLevels(255, 240);			// attacks and decays need to be tweaked !!!!!!!!!!!!!!!!!!!!!!!!!!!
 	envelope.setTimes(100, 200, 65000, 200); // 65000 is so the note will sustain 65 seconds unless a noteOff comes (it's an unsigned int so it will will overflow at 65535)
 
-
-
 	//MODenvelope.setADLevels(255, 127);		//these also need to be tweaked
 	//MODenvelope.setTimes(100, 200, 100000, 200); // 10000 is so the note will sustain 10 seconds unless a noteOff comes
 	aSin.setFreq(440); // default frequency
@@ -219,6 +230,9 @@ void updateControl() {
 
 	if (ArcadeState && !oldArcadeState) {								//if Arcedebutton is Pressed
 		arcadeNote = rand(20, 80);
+		if (seqOn && seqClockType == 1) {
+
+		}
 		HandleNoteOn(1, arcadeNote, 127);
 		oldArcadeState = ArcadeState;
 	}
@@ -462,6 +476,8 @@ void updateControl() {
 			fm_intensity = (float((lfoOutput + 128)*modDepth));
 			jitterfreq = 0;
 
+
+
 	}
 }
 
@@ -480,6 +496,10 @@ aMod.setFreq(mod_freq);
 //Serial.print(fm_intensity);
 //Serial.print("  JITTERFREQ = ");
 //Serial.println(jitterfreq);
+if (seqOn) {
+	handleSequencer();
+}
+
 }
 
 
