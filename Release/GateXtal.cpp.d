@@ -31,10 +31,8 @@ C:\Users\Cpt.Cred\AppData\Local\Temp\VMBuilds\GateXtal\arcore_leonardo\Release\G
  C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/mozzi_rand.h \
  C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/Line.h \
  C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/IntMap.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/tables/cos2048_int8.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/tables/sin2048_int8.h \
+ C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/tables/sin1024_int8.h \
  C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/tables/saw2048_int8.h \
  C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/tables/triangle2048_int8.h \
  C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/tables/square_analogue512_int8.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/tables/sin512_int8.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/tables/brownnoise8192_int8.h
+ C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/tables/sin512_int8.h

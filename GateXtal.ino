@@ -7,8 +7,6 @@
 
  TODO
  SEQ needs to trigger first note when turned on
- 
-
  */
 
 //LIBRARIES
@@ -25,20 +23,25 @@
 //const IntMap invert(0, 1024, 1024, 0);
 
 //TABLES
-#include <tables/cos2048_int8.h> // sine table for oscillator
-#include <tables/sin2048_int8.h> // cosine table for oscillator
+//#include <tables/cos512_int8.h> // sine table for oscillator
+//#include <tables/cos2048_int8.h> // sine table for oscillator
+//#include <tables/sin2048_int8.h> // cosine table for oscillator
+#include <tables/sin1024_int8.h> // cosine table for oscillator
 #include <tables/saw2048_int8.h> // saw table for oscillator
 #include <tables/triangle2048_int8.h> // triangle table for oscillator
 #include <tables/square_analogue512_int8.h> // square table for oscillator
 #include <tables/sin512_int8.h> //lofi sine for LFO
-#include <tables/brownnoise8192_int8.h> // recorded audio wavetable
-
+//#include <tables/brownnoise8192_int8.h> // recorded audio wavetable
 
 byte midiClockDivider = 1;
-byte seqClockType = 0; //0 = internal, 1 = gate in / arcadeStep, 2 = midiClock 
-unsigned int tempo = 120;
-bool seqOn = false;
+byte seqClockType = 1; //0 = internal, 1 = gate in / arcadeStep, 2 = midiClock 
+unsigned int seqTempo = 120;
+bool seqOn = true;
 byte seqLength = 16;
+byte writeOctSelect = 0;
+byte noteSelect = 0;
+byte prevNoteSelect = 0;
+bool refreshWriteNotePing = false;
 
 Line <Q16n16> aInterpolate;
 int LEDS[4] = { 14,15,2,3 };
@@ -108,8 +111,10 @@ MIDI_CREATE_DEFAULT_INSTANCE();
 //#define CONTROL_RATE 256// powers of 2 please
 
 // audio sinewave oscillator
-Oscil <COS2048_NUM_CELLS, AUDIO_RATE> aSin(COS2048_DATA);   //declare Oscillator
-Oscil <COS2048_NUM_CELLS, AUDIO_RATE> aMod(COS2048_DATA);	//declare Modulator
+Oscil <SIN1024_NUM_CELLS, AUDIO_RATE> aSin(SIN1024_DATA);   //declare Oscillator
+Oscil <SIN1024_NUM_CELLS, AUDIO_RATE> aMod(SIN1024_DATA);	//declare Modulator
+//Oscil <SIN2048_NUM_CELLS, AUDIO_RATE> aSin(SIN2048_DATA);   //declare Oscillator
+//Oscil <SIN2048_NUM_CELLS, AUDIO_RATE> aMod(SIN2048_DATA);	//declare Modulator
 Oscil <SIN512_NUM_CELLS, CONTROL_RATE> LFO(SIN512_DATA);    //LFO
 
 //AutoMap kMapIntensity(0, 1023, MIN_INTENSITY, MAX_INTENSITY);
@@ -228,11 +233,12 @@ void updateControl() {
 	///////////////////////////
 
 	if (ArcadeState && !oldArcadeState) {								//if Arcedebutton is Pressed
-		arcadeNote = rand(20, 80);
-		if (seqOn && seqClockType == 1) {
-
+		//arcadeNote = rand(20, 80);
+		; arcadeNote = 60;
+		if (seqOn && seqClockType == 1) {								
+			playNextStep();
 		}
-		HandleNoteOn(1, arcadeNote, 127);
+		// HandleNoteOn(1, arcadeNote, 127);
 		oldArcadeState = ArcadeState;
 	}
 	else if (!ArcadeState && oldArcadeState) {
@@ -316,7 +322,8 @@ void updateControl() {
 				envelope.setDecayTime(mozziRaw[h4xxKnob]);
 				break;
 			case 3:
-				//MODenvelope.setDecayTime(mozziRaw[h4xxKnob]);
+
+
 				break;
 			}
 		}
@@ -330,6 +337,7 @@ void updateControl() {
 	if (mozziRaw[attackKnob] != oldMozziRaw[attackKnob] && !knobLock[attackKnob]) { //if there was a change to attackKnob
 		int val = mozziRaw[attackKnob];
 		if (buttStates[BUTTON2]) {
+			/*
 			jitterfreq = val;
 			PitchOffset = (float(jitterfreq) - 512);
 			if (PitchOffset > -deadzone && PitchOffset < deadzone) {		//if we are in the deadzone
@@ -341,12 +349,15 @@ void updateControl() {
 			else {									//if none of above cases apply, it means we are above deadzone
 				PitchOffset = PitchOffset - deadzone;  //subtract deadzone from it so it starts from 0
 			}
+
+			*/ // seems all this "pitchoffset" stuff is unused
+
 		}
 		else {
 			switch (pageState) {           //knob does different things depending on pagestate
 			case 0:
-				mod_ratio = val >> 7;
-
+				mod_ratio = (val >> 7)+1;
+				//Serial.println(mod_ratio);
 				//Serial.println(PitchOffset);
 				break;
 
@@ -359,6 +370,9 @@ void updateControl() {
 				envelope.setDecayLevel(val);
 				break;
 			case 3:
+				
+				setWriteNote(val>>6);
+
 				//	MODenvelope.setSustainLevel(val);
 				//	MODenvelope.setDecayLevel(val);
 				break;
@@ -370,7 +384,7 @@ void updateControl() {
 		oldMozziRaw[attackKnob] = mozziRaw[attackKnob];
 	}
 	///////////////////////
-	//HANDLE RELEASE KNOB//  4
+	//HANDLE KNOB    4   //
 	///////////////////////
 	if (mozziRaw[releaseKnob] != oldMozziRaw[releaseKnob] && !knobLock[releaseKnob]) { //if there was a change to releaseKnob
 		int val = mozziRaw[releaseKnob];
@@ -398,6 +412,14 @@ void updateControl() {
 			envelope.setReleaseTime(mozziRaw[releaseKnob]);
 			break;
 		case 3:
+			if (val >> 7 != writeOctSelect) {
+				writeOctSelect = val >> 7; //0-8
+				//prevNoteSelect = 250;
+				refreshWriteNotePing = true;
+				//Serial.print("octSelect = ");
+				//Serial.println(writeOctSelect);
+				setWriteNote(noteSelect);
+			}
 			break;
 
 		default:
