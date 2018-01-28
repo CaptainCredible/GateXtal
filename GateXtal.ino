@@ -33,12 +33,13 @@
 #include <tables/sin512_int8.h> //lofi sine for LFO
 //#include <tables/brownnoise8192_int8.h> // recorded audio wavetable
 
+byte seqNoteLength = 60;
 byte midiClockDivider = 1;
-byte seqClockType = 1; //0 = internal, 1 = gate in / arcadeStep, 2 = midiClock 
+byte seqClockType = 0; //0 = Arcade only, 1 Internal clock, 2 = midiClock/gate 
 unsigned int seqTempo = 120;
-bool seqOn = true;
+//bool seqOn = true;  //SEQ I ALWAYS ON M8
 byte seqLength = 16;
-byte writeOctSelect = 0;
+byte writeOctSelect = 3;
 byte noteSelect = 0;
 byte prevNoteSelect = 0;
 bool refreshWriteNotePing = false;
@@ -234,10 +235,10 @@ void updateControl() {
 
 	if (ArcadeState && !oldArcadeState) {								//if Arcedebutton is Pressed
 		//arcadeNote = rand(20, 80);
-		; arcadeNote = 60;
-		if (seqOn && seqClockType == 1) {								
+		//; arcadeNote = 60;
+		//if (seqClockType == 1) { //Arcade always plays next stap 								
 			playNextStep();
-		}
+		//}
 		// HandleNoteOn(1, arcadeNote, 127);
 		oldArcadeState = ArcadeState;
 	}
@@ -277,6 +278,7 @@ void updateControl() {
 				//Serial.println(val+18);
 				break;
 			case 3:
+				//LENGTH PERHAPS
 				//MODenvelope.setAttackTime(val+10);
 				//Serial.print("MODATK ");
 				//Serial.println(val+10);
@@ -296,18 +298,15 @@ void updateControl() {
 	if (mozziRaw[h4xxKnob] != oldMozziRaw[h4xxKnob] && !knobLock[h4xxKnob]) {       //if h4xxknob was moved
 		int val = mozziRaw[h4xxKnob];
 
-		if (buttStates[BUTTON1]) {
-			//Serial.print("RES ");
-			lpf.setResonance(val >> 2);
-			//waveformselect = mozziRaw[h4xxKnob] >> 8; // 0 - 1024 to 0 - 4
+		
 
-				//setWaveForm(waveformselect);
-		}
-		else {
 			switch (pageState) {
 			case 0:
 				lpfCutoff = val >> 2;
 				lpf.setCutoffFreq(lpfCutoff);
+				if (buttStates[BUTTON1]) {
+					lpf.setResonance(val >> 2);
+				}
 				//Serial.println(val >> 2);
 				//Serial.println(val >> 2);
 				break;
@@ -319,14 +318,39 @@ void updateControl() {
 				//Serial.println(offsetOn);
 				break;
 			case 2:
-				envelope.setDecayTime(mozziRaw[h4xxKnob]);
+				//envelope.setDecayTime(mozziRaw[h4xxKnob]);
+				envelope.setDecayTime(val);
 				break;
 			case 3:
+				if (buttStates[BUTTON1]) {
+					//val = 1024 - val; //invert val
+					int divisor = val >> 1;
+					//seqNoteLength = seqTempo / divisor; //make notelength a division of val 
+					seqNoteLength = map(val, 0, 1024, 0, seqTempo);
+					//Serial.print("notelength - ");
+					//Serial.println(seqNoteLength);
+				}
+				//determin clock mode and tempo
+				if (!buttStates[BUTTON1]) {
+					if (val < 4) {
+						seqClockType = 0;
+					}
+					else if (val > 1020) {
+						seqClockType = 2;
+					}
+					else {
+						seqClockType = 1;
+						seqTempo = (val >> 3) + 3;
+						
+						seqTempo = (seqTempo*-1) + 130;
 
+					}
 
+				}
+				
 				break;
 			}
-		}
+		
 
 		oldMozziRaw[h4xxKnob] = mozziRaw[h4xxKnob];
 	}
@@ -337,6 +361,8 @@ void updateControl() {
 	if (mozziRaw[attackKnob] != oldMozziRaw[attackKnob] && !knobLock[attackKnob]) { //if there was a change to attackKnob
 		int val = mozziRaw[attackKnob];
 		if (buttStates[BUTTON2]) {
+			
+			
 			/*
 			jitterfreq = val;
 			PitchOffset = (float(jitterfreq) - 512);
@@ -357,8 +383,7 @@ void updateControl() {
 			switch (pageState) {           //knob does different things depending on pagestate
 			case 0:
 				mod_ratio = (val >> 7)+1;
-				//Serial.println(mod_ratio);
-				//Serial.println(PitchOffset);
+
 				break;
 
 			case 1: 
@@ -371,7 +396,8 @@ void updateControl() {
 				break;
 			case 3:
 				
-				setWriteNote(val>>6);
+				setWriteNote(val >> 6);
+				
 
 				//	MODenvelope.setSustainLevel(val);
 				//	MODenvelope.setDecayLevel(val);
@@ -396,8 +422,7 @@ void updateControl() {
 				waveformselect = val >> 8; // 0 - 1024 to 0 - 4
 				setWaveForm(waveformselect);
 			}
-			//Serial.print("REL ");
-			//Serial.println(mozziRaw[releaseKnob]);
+
 			break;
 
 		case 1:
@@ -414,10 +439,9 @@ void updateControl() {
 		case 3:
 			if (val >> 7 != writeOctSelect) {
 				writeOctSelect = val >> 7; //0-8
-				//prevNoteSelect = 250;
+
 				refreshWriteNotePing = true;
-				//Serial.print("octSelect = ");
-				//Serial.println(writeOctSelect);
+
 				setWriteNote(noteSelect);
 			}
 			break;
@@ -426,6 +450,11 @@ void updateControl() {
 			break;
 		}
 		oldMozziRaw[releaseKnob] = mozziRaw[releaseKnob];
+	}
+
+	//handle seqbutts if in seqmode:
+	if (pageState == 3) {
+		seqCheckButts();
 	}
 
 	    //////////////////    /////			   /////
@@ -517,9 +546,9 @@ aMod.setFreq(mod_freq);
 //Serial.print(fm_intensity);
 //Serial.print("  JITTERFREQ = ");
 //Serial.println(jitterfreq);
-if (seqOn) {
+//if (true) {
 	handleSequencer();
-}
+//}
 
 }
 
