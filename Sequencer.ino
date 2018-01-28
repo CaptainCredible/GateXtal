@@ -28,21 +28,18 @@ void playNextStep() {
 	seqCurrentStep++;
 	seqCurrentStep = seqCurrentStep % seqLength;
 	seqPlayStep(seqCurrentStep);
-
 }
 
 void handleSeqClock() {  // handle internal sequencerclock
 	seqIncrement++;
 
-	if (seqIncrement > seqNoteLength && notecounter > 0) {
+	if (seqIncrement > seqNoteLength && noteIsOn) {
 		HandleNoteOff(1, sequence[seqCurrentStep], 0);
 	}
 
 	if (seqIncrement > seqTempo) {
 		playNextStep();
 		seqIncrement = 0;
-		Serial.print(" -  TEMPO = ");
-		Serial.println(seqTempo);
 
 	}
 
@@ -50,13 +47,11 @@ void handleSeqClock() {  // handle internal sequencerclock
 
 void seqPlayStep(byte step) {
 	if (sequence[step]) {									//if the step is not a zero
-		HandleNoteOff(1, sequence[(step - 1) % 16], 0);		//turn off prev note
-		//Serial.print("turned off ");
-		//Serial.println(sequence[(step - 1) % 16]);
+		if (noteIsOn) {
+			HandleNoteOff(1, sequence[(step - 1) % 16], 0);		//turn off prev note
+		}
 		HandleNoteOn(1, sequence[step], 127);				//turn on next note
 		arcadeNote = sequence[step];
-		//Serial.print("turned on ");
-		//Serial.print(sequence[step]);
 
 	}
 }
@@ -81,8 +76,7 @@ void setWriteNote(byte thisNote) {
 		HandleNoteOn(1, noteToWrite, 127);
 		prevNoteSelect = noteSelect;
 		refreshWriteNotePing = false;
-		//Serial.println(noteToWrite);
-		//Serial.println(refreshWriteNotePing);
+
 
 	}
 
@@ -90,32 +84,41 @@ void setWriteNote(byte thisNote) {
 
 void seqCheckButts() {
 	if (buttStates[BUTTON2] && !oldButtStates[BUTTON2]) { //IF BUTTON 2 was just pressed
-		//Serial.println("ping");							//debug
-		sequence[seqCurrentStep] = noteToWrite;			//write our note here
-		HandleNoteOff(1, noteToWrite, 0);				//
-		seqCurrentStep++;
-		seqCurrentStep = seqCurrentStep % seqLength;
 		oldButtStates[BUTTON2] = buttStates[BUTTON2];
+		if (buttStates[BUTTON1]) {
+			//dont write a note cos we are preparing for 3 button EEPROM WRITE
+		}
+		else {
+			sequence[seqCurrentStep] = noteToWrite;			//write our note here
+			HandleNoteOff(1, noteToWrite, 0);				//
+			seqCurrentStep++;
+			seqCurrentStep = seqCurrentStep % seqLength;
+		}
 	}
 	else if (!buttStates[BUTTON2] && oldButtStates[BUTTON2]) {
 		oldButtStates[BUTTON2] = buttStates[BUTTON2];
 	}
 
 	else if (buttStates[BUTTON3] && !oldButtStates[BUTTON3]) {
-		sequence[seqCurrentStep] = 0;
-		seqCurrentStep++;
-		seqCurrentStep = seqCurrentStep % seqLength;
 		oldButtStates[BUTTON3] = buttStates[BUTTON3];
+		if (buttStates[BUTTON1] && buttStates[BUTTON2]) {
+			Serial.println("EEPROM WRITE");
+			writeSeqToEeprom();
+		}
+		else {
+			sequence[seqCurrentStep] = 0;
+			seqCurrentStep++;
+			seqCurrentStep = seqCurrentStep % seqLength;
+		}
 	}
 	else if (!buttStates[BUTTON3] && oldButtStates[BUTTON3]) {
 		oldButtStates[BUTTON3] = buttStates[BUTTON3];
 	}
-	
+
 
 	else if (buttStates[BUTTON1] && !oldButtStates[BUTTON1]) {
-		//playPrevStep();
 		oldButtStates[BUTTON1] = buttStates[BUTTON1];
-	} 
+	}
 	else if (!buttStates[BUTTON1] && oldButtStates[BUTTON1]) {
 		//HandleNoteOff(1,sequence[seqCurrentStep],0);
 		oldButtStates[BUTTON1] = buttStates[BUTTON1];
@@ -123,6 +126,24 @@ void seqCheckButts() {
 
 
 
+}
+
+void writeSeqToEeprom() {
+	for (byte i = 0; i < 16; i++) {
+		for (byte i = 0; i < 4; i++) {
+			digitalWrite(LEDS[i], HIGH);
+		}
+		EEPROM.write(i, sequence[i]);
+		for (byte i = 0; i < 3; i++) {
+			digitalWrite(LEDS[i], LOW);
+		}
 	}
+	EEPROM.write(100, 123); //magic flag so we can tell if EEPROM contains a sequence or mumbo jumbo.
+}
 
-
+void readSeqFromEeprom() {
+	for (int i = 0; i < 16; i++) {
+		sequence[i] = EEPROM.read(i);
+	}
+	EEPROM.write(100, 123); //magic flag so we can tell if EEPROM contains a sequence or mumbo jumbo.
+}

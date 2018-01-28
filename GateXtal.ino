@@ -1,4 +1,4 @@
-
+#define AUDIO_RATE 1000
 
 /*
  Name:		GateXtal.ino
@@ -9,7 +9,8 @@
  SEQ needs to trigger first note when turned on
  */
 
-//LIBRARIES
+ //LIBRARIES
+#include <EEPROM\EEPROM.h>
 #include <MIDI.h>
 #include <MozziGuts.h>
 #include <Oscil.h> // oscillator template
@@ -33,9 +34,10 @@
 #include <tables/sin512_int8.h> //lofi sine for LFO
 //#include <tables/brownnoise8192_int8.h> // recorded audio wavetable
 
+byte midiSeqNoteLength = 23;
 byte seqNoteLength = 60;
 byte midiClockDivider = 1;
-byte seqClockType = 0; //0 = Arcade only, 1 Internal clock, 2 = midiClock/gate 
+byte seqClockType = 0; //0 = Arcade only or midi clock or ext gate, 1 Internal clock
 unsigned int seqTempo = 120;
 //bool seqOn = true;  //SEQ I ALWAYS ON M8
 byte seqLength = 16;
@@ -55,7 +57,7 @@ bool buttStates[5] = { false, false, false, false, false };
 bool oldButtStates[5] = { false, false, false, false, false };
 bool ArcadeState = false;
 bool oldArcadeState = false;
-int notecounter = 0; //keep track of number of playing notes
+bool noteIsOn = false; //keep track of number of playing notes
 const byte NOTEON = 0x09;
 const byte NOTEOFF = 0x08;
 int jitterfreq = 0;
@@ -109,26 +111,24 @@ MIDI_CREATE_DEFAULT_INSTANCE();
 
 #define CONTROL_RATE 128// powers of 2 please
 
-//#define CONTROL_RATE 256// powers of 2 please
 
 // audio sinewave oscillator
 Oscil <SIN1024_NUM_CELLS, AUDIO_RATE> aSin(SIN1024_DATA);   //declare Oscillator
 Oscil <SIN1024_NUM_CELLS, AUDIO_RATE> aMod(SIN1024_DATA);	//declare Modulator
-//Oscil <SIN2048_NUM_CELLS, AUDIO_RATE> aSin(SIN2048_DATA);   //declare Oscillator
-//Oscil <SIN2048_NUM_CELLS, AUDIO_RATE> aMod(SIN2048_DATA);	//declare Modulator
 Oscil <SIN512_NUM_CELLS, CONTROL_RATE> LFO(SIN512_DATA);    //LFO
 
-//AutoMap kMapIntensity(0, 1023, MIN_INTENSITY, MAX_INTENSITY);
 
 // envelope generator
 ADSR <CONTROL_RATE, AUDIO_RATE> envelope;					//declare AMP env
-//ADSR <CONTROL_RATE, AUDIO_RATE> MODenvelope;				//declare FM / MOD env
-
 LowPassFilter lpf;
 
 
 
 void setup() {
+	int magicNumber = EEPROM.read(100);
+	if (magicNumber == 123) {
+		readSeqFromEeprom();
+	}
 	for (int i = 0; i < 5; i++) {
 		pinMode(BUTTONS[i], INPUT_PULLUP);
 	}
@@ -138,8 +138,8 @@ void setup() {
 	}
 
 
-	randSeed(); // fresh random
-	//pinMode(LED, OUTPUT);
+	//randSeed(); // fresh random
+
 	MIDI.setHandleNoteOn(HandleNoteOn);  // This is where we'll handle Hardware MIDI noteons (Put only the name of the function) 
 	MIDI.setHandleNoteOff(HandleNoteOff);  // This is where well handle hardware midi noteoffs
 	MIDI.begin(MIDI_CHANNEL_OMNI); // Initiate MIDI communications, listen to all channels
@@ -147,13 +147,10 @@ void setup() {
 	envelope.setADLevels(255, 240);			// attacks and decays need to be tweaked !!!!!!!!!!!!!!!!!!!!!!!!!!!
 	envelope.setTimes(100, 200, 65000, 200); // 65000 is so the note will sustain 65 seconds unless a noteOff comes (it's an unsigned int so it will will overflow at 65535)
 
-	//MODenvelope.setADLevels(255, 127);		//these also need to be tweaked
-	//MODenvelope.setTimes(100, 200, 100000, 200); // 10000 is so the note will sustain 10 seconds unless a noteOff comes
 	aSin.setFreq(440); // default frequency
 	startMozzi(CONTROL_RATE);
-	//Serial.begin(9600);
 
-	
+
 
 
 	pinMode(LED_BUILTIN_TX, INPUT); // Deactivate RX LED
@@ -169,12 +166,29 @@ void lockKnobs() {
 	for (int i = 0; i < 4; i++) {
 		lockAnchor[i] = mozziRaw[i];
 		knobLock[i] = true;
-		//Serial.println("KNOBS LOCKED");
+		
 	}
 }
 
 void updateControl() {
-	usbmidiprocessing(); //check for USB midi notes
+	while (MIDIUSB.available() > 0) {
+		MIDIEvent e = MIDIUSB.read();
+		// IF NOTE ON WITH VELOCITY GREATER THAN ZERO
+		if ((e.type == NOTEON) && (e.m3 > 0)) {
+			jitterfreq = 0;
+			HandleNoteOn(e.m1, e.m2, e.m3);
+		}
+		else if (e.type == NOTEOFF) {
+			HandleNoteOff(e.m1, e.m2, e.m3);
+		}
+		// IF NOTE ON W/ ZERO VELOCITY
+		else if ((e.type == NOTEON) && (e.m3 == 0)) {
+			HandleNoteOff(e.m1, e.m2, e.m3);
+		}
+		// IF USB NOTE OFF
+
+	}
+	//usbmidiprocessing(); //check for USB midi notes moved into this file for assurance against quirks
 	MIDI.read(); //check for DIN midi notes	
 
 	for (int i = 0; i < 4; i++) {
@@ -182,11 +196,6 @@ void updateControl() {
 		if (knobLock[i]) {                       //if this knob is locked
 			if (mozziRaw[i] > lockAnchor[i] + lockThresh || mozziRaw[i] < lockAnchor[i] - lockThresh) { // if this knob has wandered far enough from the lock anchor, we can start listening to it
 				knobLock[i] = false;
-
-				//Serial.print("Knob nr.");
-				//Serial.print(i);
-				//Serial.println(" was unlocked");
-
 			}
 		}
 	}
@@ -194,7 +203,6 @@ void updateControl() {
 	for (int i = 0; i < 5; i++) {
 		buttStates[i] = !digitalRead(BUTTONS[i]); //get buttstates
 		if (buttStates[i]) {
-			//	Serial.println(i);
 		}
 
 		ArcadeState = !digitalRead(ARCADEBUTTON);
@@ -206,8 +214,6 @@ void updateControl() {
 		pageState--;
 		digitalWrite(LEDS[(pageState + 1) % 4], LOW);
 		pageState = pageState % 4;
-		//Serial.print("page ");
-		//Serial.println(pageState);
 		digitalWrite(LEDS[pageState], HIGH);
 		oldButtStates[minusButton] = buttStates[minusButton];	//remember this happened
 	}
@@ -220,8 +226,6 @@ void updateControl() {
 		pageState++;
 		digitalWrite(LEDS[(pageState - 1)], LOW);
 		pageState = pageState % 4;
-		//Serial.print("page ");
-		//Serial.println(pageState);
 		digitalWrite(LEDS[pageState], HIGH);
 		oldButtStates[plusButton] = buttStates[plusButton];	//remember this happened
 	}
@@ -237,7 +241,7 @@ void updateControl() {
 		//arcadeNote = rand(20, 80);
 		//; arcadeNote = 60;
 		//if (seqClockType == 1) { //Arcade always plays next stap 								
-			playNextStep();
+		playNextStep();
 		//}
 		// HandleNoteOn(1, arcadeNote, 127);
 		oldArcadeState = ArcadeState;
@@ -258,34 +262,29 @@ void updateControl() {
 
 
 
-			switch (pageState) {
-			case 0:
-				fm_intensity = (float(val));// *FMenvelope.next();
-				break;
-			case 1:
-				rndFreq = (val*-1 +1024)<<5; //invert and scale down
+		switch (pageState) {
+		case 0:
+			fm_intensity = (float(val));// *FMenvelope.next();
+			break;
+		case 1:
+			rndFreq = (val*-1 + 1024) << 5; //invert and scale down
 
-				freeq = val;
-				LFO.setFreq(freeq / 50);
-				//CONTROL LFO RATE
-				//modToFMIntensity = val;
-				//modToFMIntensity = modToFMIntensity / 1000;
-				//Serial.println(modToFMIntensity);
-				break;
-			case 2:
-				envelope.setAttackTime(val + 18);
-				//Serial.print("ATK ");
-				//Serial.println(val+18);
-				break;
-			case 3:
-				//LENGTH PERHAPS
-				//MODenvelope.setAttackTime(val+10);
-				//Serial.print("MODATK ");
-				//Serial.println(val+10);
-				break;
+			freeq = val;
+			LFO.setFreq(freeq / 50);
+			//CONTROL LFO RATE
+			//modToFMIntensity = val;
+			//modToFMIntensity = modToFMIntensity / 1000;
+			break;
+		case 2:
+			envelope.setAttackTime(val + 18);
+			break;
+		case 3:
+			//LENGTH PERHAPS
+			//MODenvelope.setAttackTime(val+10);
+			break;
 
-			}
-		
+		}
+
 
 		oldMozziRaw[FMknob] = mozziRaw[FMknob];
 	}
@@ -294,63 +293,62 @@ void updateControl() {
 	////////////////////////
 	//HANDLE HAXX KNOB    // 2
 	////////////////////////
-	//Serial.println(buttStates[BUTTON1]);
+
 	if (mozziRaw[h4xxKnob] != oldMozziRaw[h4xxKnob] && !knobLock[h4xxKnob]) {       //if h4xxknob was moved
 		int val = mozziRaw[h4xxKnob];
 
-		
 
-			switch (pageState) {
-			case 0:
-				lpfCutoff = val >> 2;
-				lpf.setCutoffFreq(lpfCutoff);
-				if (buttStates[BUTTON1]) {
-					lpf.setResonance(val >> 2);
-				}
-				//Serial.println(val >> 2);
-				//Serial.println(val >> 2);
-				break;
-			case 1:
-				//CONTROL LFO DEPTH BIPOLAR M8
-				freeq = val;
-				modDepth = freeq / 1000;
-				offsetOn = modDepth;
-				//Serial.println(offsetOn);
-				break;
-			case 2:
-				//envelope.setDecayTime(mozziRaw[h4xxKnob]);
-				envelope.setDecayTime(val);
-				break;
-			case 3:
-				if (buttStates[BUTTON1]) {
-					//val = 1024 - val; //invert val
+
+		switch (pageState) {
+		case 0:
+			lpfCutoff = val >> 2;
+			lpf.setCutoffFreq(lpfCutoff);
+			if (buttStates[BUTTON1]) {
+				lpf.setResonance(val >> 2);
+			}
+			break;
+		case 1:
+			//CONTROL LFO DEPTH BIPOLAR M8
+			freeq = val;
+			modDepth = freeq / 1000;
+			offsetOn = modDepth;
+			break;
+		case 2:
+			//envelope.setDecayTime(mozziRaw[h4xxKnob]);
+			envelope.setDecayTime(val);
+			break;
+		case 3:
+			if (buttStates[BUTTON1]) {
+				if (seqClockType != 2) {//val = 1024 - val; //invert val
 					int divisor = val >> 1;
 					//seqNoteLength = seqTempo / divisor; //make notelength a division of val 
 					seqNoteLength = map(val, 0, 1024, 0, seqTempo);
-					//Serial.print("notelength - ");
-					//Serial.println(seqNoteLength);
+					//midiSeqNoteLength = map(val, 0, 1024, 0, 24);
+					midiSeqNoteLength = val >> 5; // scale val 0-32
 				}
-				//determin clock mode and tempo
-				if (!buttStates[BUTTON1]) {
-					if (val < 4) {
-						seqClockType = 0;
-					}
-					else if (val > 1020) {
-						seqClockType = 2;
-					}
-					else {
-						seqClockType = 1;
-						seqTempo = (val >> 3) + 3;
-						
-						seqTempo = (seqTempo*-1) + 130;
-
-					}
-
+				else {
+					midiSeqNoteLength = map(val, 0, 1023, 0, 24);
+					//midiSeqNoteLength = val >> 5; // scale val 0-32
 				}
-				
-				break;
 			}
-		
+			//determin clock mode and tempo
+			if (!buttStates[BUTTON1]) {
+				if (val < 4) {
+					seqClockType = 0;
+				}
+				else {
+					seqClockType = 1;
+					seqTempo = (val >> 3) + 3;
+
+					seqTempo = (seqTempo*-1) + 130;
+
+				}
+
+			}
+
+			break;
+		}
+
 
 		oldMozziRaw[h4xxKnob] = mozziRaw[h4xxKnob];
 	}
@@ -361,8 +359,8 @@ void updateControl() {
 	if (mozziRaw[attackKnob] != oldMozziRaw[attackKnob] && !knobLock[attackKnob]) { //if there was a change to attackKnob
 		int val = mozziRaw[attackKnob];
 		if (buttStates[BUTTON2]) {
-			
-			
+
+
 			/*
 			jitterfreq = val;
 			PitchOffset = (float(jitterfreq) - 512);
@@ -382,11 +380,11 @@ void updateControl() {
 		else {
 			switch (pageState) {           //knob does different things depending on pagestate
 			case 0:
-				mod_ratio = (val >> 7)+1;
+				mod_ratio = (val >> 7) + 1;
 
 				break;
 
-			case 1: 
+			case 1:
 				//CONTROL LFO DEST
 				lfoDest = val >> 8;   //4 different Destinations
 				break;
@@ -395,9 +393,9 @@ void updateControl() {
 				envelope.setDecayLevel(val);
 				break;
 			case 3:
-				
+
 				setWriteNote(val >> 6);
-				
+
 
 				//	MODenvelope.setSustainLevel(val);
 				//	MODenvelope.setDecayLevel(val);
@@ -457,32 +455,28 @@ void updateControl() {
 		seqCheckButts();
 	}
 
-	    //////////////////    /////			   /////
-	    //////////////////    /////			  /////
-	    /////				  /////			 /////
-		/////				   /////        /////
-		/////				   /////       /////
-		/////					/////     /////
-		/////					 /////   /////
-		/////					  ///// /////
-		//////////////////		   /////////
-		//////////////////			//////
+	//////////////////    /////			   /////
+	//////////////////    /////			  /////
+	/////				  /////			 /////
+	/////				   /////        /////
+	/////				   /////       /////
+	/////					/////     /////
+	/////					 /////   /////
+	/////					  ///// /////
+	//////////////////		   /////////
+	//////////////////			//////
 
-	//HANDLE INTERNAL "CV"
+//HANDLE INTERNAL "CV"
 	envelope.update();
-	//Serial.println(LFO.next());
-
-	//lfoOutput = lfoOutput;// *modDepth;
-	//MODenvelope.update(); //WIP
-	//Serial.println(modDepth);
+	
 	if (offsetOn) {
 		if (LFOWaveSelect == 0) {
 			lfoOutput = LFO.next();
 		}
 		else {
 			//RANDOM
-			
-			if (mozziMicros() - rndTimer > (rndFreq<<3) ) {
+
+			if (mozziMicros() - rndTimer > (rndFreq << 3)) {
 				int lfoOutputBUFFER = rand(0, 244); //if depth adjusts this we can skip a float calc later
 				//int lfoOutputBUFFER = rand(0, mozziRaw[1]); //if depth adjusts this we can skip a float calc later
 				//int slew = ((invert(mozziRaw[3]))>>2)+1; //invert the value and drop it down by two bits and make sure it doesnt go under 1
@@ -494,12 +488,12 @@ void updateControl() {
 			aInterpolate.set(HDlfoOutputBuffer, slew);
 			Q16n16 interpolatedLfoOutputBUFFER = aInterpolate.next();
 			lfoOutput = Q16n16_to_Q16n0(interpolatedLfoOutputBUFFER) - 128; //scaled back down to int and offset to -128 to 128
-			//Serial.println(rndFreq);
-			
+
+
 		}
-		
+
 		if (lfoDest == 0) {
-			
+
 			aSinFreq = noteFreq + (lfoOutput * modDepth);
 			aSin.setFreq(aSinFreq);
 		}
@@ -507,8 +501,8 @@ void updateControl() {
 			aSinFreq = noteFreq;
 		}
 
-		if (lfoDest == 1){
-			
+		if (lfoDest == 1) {
+
 
 			int cutoffBuffer = lpfCutoff + (lfoOutput + 126 * modDepth);
 			if (cutoffBuffer < 0) {
@@ -521,35 +515,20 @@ void updateControl() {
 			lpf.setCutoffFreq(cutoffBuffer);
 		}
 		if (lfoDest == 2) {
-		
+
 			//fm_intensity = (float(val));// *FMenvelope.next();
 			fm_intensity = (float((lfoOutput + 128)*modDepth));
 			jitterfreq = 0;
 
 
 
+		}
 	}
-}
 
-int mod_freq = aSinFreq * mod_ratio;
-aMod.setFreq(mod_freq);
-//Serial.print("aModFREQ = ");
-//Serial.println(aSinFreq);
-
-//lpf.setCutoffFreq(MODenvelope.next());
-
-//	Serial.print("MOD: ");
-//	Serial.print(MODenvelope.next());
-//	Serial.print("  AMP: ");
-//	Serial.println(envelope.next());
-//Serial.print("FM_INTENSITY = ");
-//Serial.print(fm_intensity);
-//Serial.print("  JITTERFREQ = ");
-//Serial.println(jitterfreq);
-//if (true) {
+	int mod_freq = aSinFreq * mod_ratio;
+	aMod.setFreq(mod_freq);
 	handleSequencer();
-//}
-
+	
 }
 
 

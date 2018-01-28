@@ -11,6 +11,7 @@ C:\Users\Cpt.Cred\AppData\Local\Temp\VMBuilds\GateXtal\arcore_leonardo\Release\G
  C:\Users\Cpt.Cred\AppData\Local\arduino15\packages\arcore\hardware\avr\1.0.0\cores\arcore/new.h \
  C:\Users\Cpt.Cred\AppData\Local\arduino15\packages\arcore\hardware\avr\1.0.0\cores\arcore/USBAPI.h \
  C:\Program\ Files\ (x86)\Arduino\hardware\arduino\avr\variants\leonardo/pins_arduino.h \
+ C:\Users\Cpt.Cred\AppData\Local\arduino15\packages\arcore\hardware\avr\1.0.0\libraries/EEPROM\EEPROM.h \
  C:\Users\Cpt.Cred\Documents\Arduino\libraries\MIDI/MIDI.h \
  C:\Users\Cpt.Cred\Documents\Arduino\libraries\MIDI/midi_Defs.h \
  C:\Users\Cpt.Cred\Documents\Arduino\libraries\MIDI/midi_Namespace.h \
