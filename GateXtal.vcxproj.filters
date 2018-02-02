@@ -18,6 +18,7 @@
     <None Include="GateXtal.ino" />
     <None Include="MidiHandling.ino" />
     <None Include="waveSelect.ino" />
+    <None Include="Sequencer.ino" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="__vm\.GateXtal.vsarduino.h">

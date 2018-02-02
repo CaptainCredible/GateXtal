@@ -1,48 +1,79 @@
+void writeLED(bool state) {
+	if (seqClockType == 2) {
+	}
+	else {
+		digitalWrite(LED, state);
+	}
+}
+
+void HandleDINNoteOn(byte channel, byte note, byte velocity) {
+	HandleNoteOn(channel, note, velocity);
+	if (pageState == 3 && buttStates[BUTTON2]) {
+		noteToWrite = note;
+		writeToSeq();
+	}
+}
+
 void HandleNoteOn(byte channel, byte note, byte velocity) {
-	notecounter++;
-	noteFreq = mtof(float(note));
-	aSinFreq = noteFreq;// +lfoOutput;
-	aSin.setFreq(aSinFreq);
-	envelope.noteOn();
-	//MODenvelope.noteOn();
-	digitalWrite(LED, HIGH);
-	lastNote = note;
+	if (note != 0) {   //if not zero
+		noteIsOn = true;
+		noteFreq = mtof(float(note));
+		aSinFreq = noteFreq;
+		aSin.setFreq(aSinFreq);
+		envelope.noteOn();
+		writeLED(true);
+		lastNote = note;
+		/* THIS CAN'T BE HERE IDIOT
+		if (pageState == 3 && buttStates[BUTTON2]) {
+			noteToWrite = note;
+			writeToSeq();
+		}
+		*/
+	}
+}
+
+void HandleDINNoteOff(byte channel, byte note, byte velocity) {
+	HandleNoteOff(channel, note, velocity);
 }
 
 void HandleNoteOff(byte channel, byte note, byte velocity) {
-	notecounter--;
+	noteIsOn = false;
 	if (note == lastNote) { //only turn voice off if it was the last note to be pushed that was released
 		envelope.noteOff();
-		//MODenvelope.noteOff();
-		digitalWrite(LED, LOW);
+		writeLED(false);
 	}
+}
+
+void HandleMIDIClock() {
+
 }
 
 void usbmidiprocessing()
 {
 	while (MIDIUSB.available() > 0) {
 		MIDIEvent e = MIDIUSB.read();
-
 		// IF NOTE ON WITH VELOCITY GREATER THAN ZERO
 		if ((e.type == NOTEON) && (e.m3 > 0)) {
 			jitterfreq = 0;
-			digitalWrite(LED, HIGH);
 			HandleNoteOn(e.m1, e.m2, e.m3);
-			//Serial.println(notecounter);
-
-		}
-
-		// IF NOTE ON W/ ZERO VELOCITY
-		if ((e.type == NOTEON) && (e.m3 == 0)) {
-			HandleNoteOff(e.m1, e.m2, e.m3);
-			//Serial.println(notecounter);
-
-
+			if (pageState == 3 && buttStates[BUTTON2]) {
+				noteToWrite = e.m2;
+				writeToSeq();
+			}
 		}
 		// IF USB NOTE OFF
-		if (e.type == NOTEOFF) {
+		else if (e.type == NOTEOFF) {
 			HandleNoteOff(e.m1, e.m2, e.m3);
-			//Serial.println(notecounter);
+		}
+		// IF NOTE ON W/ ZERO VELOCITY
+		else if ((e.type == NOTEON) && (e.m3 == 0)) {
+			HandleNoteOff(e.m1, e.m2, e.m3);
+		}
+		else if (e.type == TICK) {
+			handleMidiClockTicks();
+		}
+		else if (e.type == STOP) {
+			resetSeq();
 		}
 	}
 }
