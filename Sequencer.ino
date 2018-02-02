@@ -3,6 +3,7 @@
 
 
 void handleMidiClockTicks() {
+	midiClockRunning = true;
 	midiClockTicks++;
 	midiClockTicks = midiClockTicks % midiClockStepSize; 
 	if (midiClockTicks == 1) {
@@ -32,6 +33,7 @@ void handleSequencer() {
 	}
 }
 
+
 void resetSeq() {
 	seqCurrentStep = seqLength-1;
 	midiClockTicks = 0;
@@ -49,9 +51,14 @@ void playNextStep() {
 	//Serial.print(seqCurrentStep);
 	//Serial.print(" Seq LENGTH = ");
 	//Serial.println(seqLength);
-
 	seqCurrentStep = seqCurrentStep % seqLength;
 	seqPlayStep(seqCurrentStep);
+}
+
+void seqRetriggerStep() {
+	HandleNoteOff(sequence[seqCurrentStep],0);
+	HandleNoteOn(sequence[seqCurrentStep],127);
+
 }
 
 void handleSeqClock() {  // handle internal sequencerclock

@@ -15,14 +15,21 @@ void HandleDINNoteOn(byte channel, byte note, byte velocity) {
 
 void HandleNoteOn(byte note, byte velocity) {
 	if (note != 0) {   //if not zero
+		int octedNote = constrain(note + (octTranspose * 12), 0, 127);
 		noteIsOn = true;
-		noteFreq = mtof(float(note));
+		noteFreq = mtof(float(octedNote));
 		aSinFreq = noteFreq;
 		aSin.setFreq(aSinFreq);
 		envelope.noteOn();
 		writeLED(true);
 		lastNote = note;
 	}
+}
+
+void legato(byte note) {
+	noteFreq = mtof(float(note));
+	aSinFreq = noteFreq;
+	aSin.setFreq(aSinFreq);
 }
 
 void HandleDINNoteOff(byte channel, byte note, byte velocity) {
@@ -37,8 +44,24 @@ void HandleNoteOff(byte note, byte velocity) {
 	}
 }
 
-void HandleMIDIClock() {
+void handleMIDIClock() {
+	if (!internalClockSelect) {
+		handleMidiClockTicks();
+	}
+}
 
+void handleMIDIClockStart(){
+	if (!internalClockSelect) {
+		resetSeq();
+	}
+
+}
+
+void handleMIDIClockStop() {
+	if (!internalClockSelect) {
+		HandleNoteOff(sequence[seqCurrentStep], 0);
+		midiClockRunning = false;
+	}
 }
 
 
@@ -72,7 +95,10 @@ void usbmidiprocessing(){
 				handleMidiClockTicks();
 			}
 			if (e.m1 == 252) {
-				HandleNoteOff(sequence[seqCurrentStep], 0);
+				if (!internalClockSelect) {
+					HandleNoteOff(sequence[seqCurrentStep], 0);
+					midiClockRunning = false;
+				}
 			}
 		}
 		else if (e.type == RESTART) {
