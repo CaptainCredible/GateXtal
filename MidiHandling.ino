@@ -4,21 +4,36 @@ void writeLED(bool state) {
 	else {
 		digitalWrite(LED, state);
 	}
-
 }
 
+void HandleDINNoteOn(byte channel, byte note, byte velocity) {
+	HandleNoteOn(channel, note, velocity);
+	if (pageState == 3 && buttStates[BUTTON2]) {
+		noteToWrite = note;
+		writeToSeq();
+	}
+}
 
 void HandleNoteOn(byte channel, byte note, byte velocity) {
-	if (note != 0){   //if not zero
+	if (note != 0) {   //if not zero
 		noteIsOn = true;
-	//noteIsOn++;
-	noteFreq = mtof(float(note));
-	aSinFreq = noteFreq;// +lfoOutput;
-	aSin.setFreq(aSinFreq);
-	envelope.noteOn();
-	writeLED(true);
-	lastNote = note;
+		noteFreq = mtof(float(note));
+		aSinFreq = noteFreq;
+		aSin.setFreq(aSinFreq);
+		envelope.noteOn();
+		writeLED(true);
+		lastNote = note;
+		/* THIS CAN'T BE HERE IDIOT
+		if (pageState == 3 && buttStates[BUTTON2]) {
+			noteToWrite = note;
+			writeToSeq();
+		}
+		*/
 	}
+}
+
+void HandleDINNoteOff(byte channel, byte note, byte velocity) {
+	HandleNoteOff(channel, note, velocity);
 }
 
 void HandleNoteOff(byte channel, byte note, byte velocity) {
@@ -29,6 +44,10 @@ void HandleNoteOff(byte channel, byte note, byte velocity) {
 	}
 }
 
+void HandleMIDIClock() {
+
+}
+
 void usbmidiprocessing()
 {
 	while (MIDIUSB.available() > 0) {
@@ -37,7 +56,12 @@ void usbmidiprocessing()
 		if ((e.type == NOTEON) && (e.m3 > 0)) {
 			jitterfreq = 0;
 			HandleNoteOn(e.m1, e.m2, e.m3);
+			if (pageState == 3 && buttStates[BUTTON2]) {
+				noteToWrite = e.m2;
+				writeToSeq();
+			}
 		}
+		// IF USB NOTE OFF
 		else if (e.type == NOTEOFF) {
 			HandleNoteOff(e.m1, e.m2, e.m3);
 		}
@@ -45,7 +69,11 @@ void usbmidiprocessing()
 		else if ((e.type == NOTEON) && (e.m3 == 0)) {
 			HandleNoteOff(e.m1, e.m2, e.m3);
 		}
-		// IF USB NOTE OFF
-		
+		else if (e.type == TICK) {
+			handleMidiClockTicks();
+		}
+		else if (e.type == STOP) {
+			resetSeq();
+		}
 	}
 }

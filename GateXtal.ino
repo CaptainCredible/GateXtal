@@ -1,4 +1,4 @@
-#define AUDIO_RATE 1000
+//#define AUDIO_RATE 1000
 
 /*
  Name:		GateXtal.ino
@@ -34,6 +34,12 @@
 #include <tables/sin512_int8.h> //lofi sine for LFO
 //#include <tables/brownnoise8192_int8.h> // recorded audio wavetable
 
+byte noteToWrite = 0;
+byte octOffset = 0;
+byte sequence[64] = { 40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51 };
+unsigned int seqIncrement = 0; //counter to keep track of when next step should come
+byte seqCurrentStep = 0;
+byte midiClockTicks = 0;
 byte midiSeqNoteLength = 23;
 byte seqNoteLength = 60;
 byte midiClockDivider = 1;
@@ -60,6 +66,8 @@ bool oldArcadeState = false;
 bool noteIsOn = false; //keep track of number of playing notes
 const byte NOTEON = 0x09;
 const byte NOTEOFF = 0x08;
+const byte MCLOCKTICK = 0x03;
+
 int jitterfreq = 0;
 byte pageState = 0;
 float noteFreq = 0; //value to store current root freq of note
@@ -140,8 +148,9 @@ void setup() {
 
 	//randSeed(); // fresh random
 
-	MIDI.setHandleNoteOn(HandleNoteOn);  // This is where we'll handle Hardware MIDI noteons (Put only the name of the function) 
-	MIDI.setHandleNoteOff(HandleNoteOff);  // This is where well handle hardware midi noteoffs
+	MIDI.setHandleNoteOn(HandleDINNoteOn);  // This is where we'll handle Hardware MIDI noteons (Put only the name of the function) 
+	MIDI.setHandleNoteOff(HandleDINNoteOff);  // This is where well handle hardware midi noteoffs
+	MIDI.setHandleClock(HandleMIDIClock);
 	MIDI.begin(MIDI_CHANNEL_OMNI); // Initiate MIDI communications, listen to all channels
 
 	envelope.setADLevels(255, 240);			// attacks and decays need to be tweaked !!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -170,26 +179,14 @@ void lockKnobs() {
 	}
 }
 
-void updateControl() {
-	while (MIDIUSB.available() > 0) {
-		MIDIEvent e = MIDIUSB.read();
-		// IF NOTE ON WITH VELOCITY GREATER THAN ZERO
-		if ((e.type == NOTEON) && (e.m3 > 0)) {
-			jitterfreq = 0;
-			HandleNoteOn(e.m1, e.m2, e.m3);
-		}
-		else if (e.type == NOTEOFF) {
-			HandleNoteOff(e.m1, e.m2, e.m3);
-		}
-		// IF NOTE ON W/ ZERO VELOCITY
-		else if ((e.type == NOTEON) && (e.m3 == 0)) {
-			HandleNoteOff(e.m1, e.m2, e.m3);
-		}
-		// IF USB NOTE OFF
 
-	}
-	//usbmidiprocessing(); //check for USB midi notes moved into this file for assurance against quirks
-	MIDI.read(); //check for DIN midi notes	
+#define TICK 15
+#define STOP 11
+
+void updateControl() {
+
+	usbmidiprocessing(); //check for USB midi
+	MIDI.read(); //check for DIN midi
 
 	for (int i = 0; i < 4; i++) {
 		mozziRaw[i] = mozziAnalogRead(KNOBS[i]); //get knobstates
@@ -238,12 +235,13 @@ void updateControl() {
 	///////////////////////////
 
 	if (ArcadeState && !oldArcadeState) {								//if Arcedebutton is Pressed
-		//arcadeNote = rand(20, 80);
-		//; arcadeNote = 60;
-		//if (seqClockType == 1) { //Arcade always plays next stap 								
+		
+		if (pageState == 3 && buttStates[BUTTON2]) {
+			writeToSeq();
+		} else {
 		playNextStep();
-		//}
-		// HandleNoteOn(1, arcadeNote, 127);
+		}
+
 		oldArcadeState = ArcadeState;
 	}
 	else if (!ArcadeState && oldArcadeState) {
@@ -320,7 +318,7 @@ void updateControl() {
 		case 3:
 			if (buttStates[BUTTON1]) {
 				if (seqClockType != 2) {//val = 1024 - val; //invert val
-					int divisor = val >> 1;
+					//int divisor = val >> 1;
 					//seqNoteLength = seqTempo / divisor; //make notelength a division of val 
 					seqNoteLength = map(val, 0, 1024, 0, seqTempo);
 					//midiSeqNoteLength = map(val, 0, 1024, 0, 24);
@@ -337,19 +335,13 @@ void updateControl() {
 					seqClockType = 0;
 				}
 				else {
-					seqClockType = 1;
-					seqTempo = (val >> 3) + 3;
-
-					seqTempo = (seqTempo*-1) + 130;
-
+					seqClockType = 1;				 //INTERNAL
+					seqTempo = (val >> 3) + 3;       //SCALE DOWN
+					seqTempo = (seqTempo*-1) + 130;	 //INVERT
 				}
-
 			}
-
 			break;
 		}
-
-
 		oldMozziRaw[h4xxKnob] = mozziRaw[h4xxKnob];
 	}
 
@@ -358,26 +350,7 @@ void updateControl() {
 	//////////////////////
 	if (mozziRaw[attackKnob] != oldMozziRaw[attackKnob] && !knobLock[attackKnob]) { //if there was a change to attackKnob
 		int val = mozziRaw[attackKnob];
-		if (buttStates[BUTTON2]) {
-
-
-			/*
-			jitterfreq = val;
-			PitchOffset = (float(jitterfreq) - 512);
-			if (PitchOffset > -deadzone && PitchOffset < deadzone) {		//if we are in the deadzone
-				PitchOffset = 0;											//set value to zero
-			}
-			else if (PitchOffset <= -deadzone) {      //if its below lower deadzone
-				PitchOffset = PitchOffset + deadzone;  //add deadzone to it so it starts from 0
-			}
-			else {									//if none of above cases apply, it means we are above deadzone
-				PitchOffset = PitchOffset - deadzone;  //subtract deadzone from it so it starts from 0
-			}
-
-			*/ // seems all this "pitchoffset" stuff is unused
-
-		}
-		else {
+		
 			switch (pageState) {           //knob does different things depending on pagestate
 			case 0:
 				mod_ratio = (val >> 7) + 1;
@@ -393,9 +366,13 @@ void updateControl() {
 				envelope.setDecayLevel(val);
 				break;
 			case 3:
-
-				setWriteNote(val >> 6);
-
+				
+				if (buttStates[BUTTON2]) {
+					setWriteNote(val >> 6);
+				}
+				else {
+					//some other function !!
+				}
 
 				//	MODenvelope.setSustainLevel(val);
 				//	MODenvelope.setDecayLevel(val);
@@ -403,7 +380,7 @@ void updateControl() {
 
 			default:
 				break;
-			}
+			
 		}
 		oldMozziRaw[attackKnob] = mozziRaw[attackKnob];
 	}
