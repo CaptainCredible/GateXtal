@@ -1,4 +1,4 @@
-//#define AUDIO_RATE 1000
+
 
 /*
  Name:		GateXtal.ino
@@ -34,16 +34,23 @@
 #include <tables/sin512_int8.h> //lofi sine for LFO
 //#include <tables/brownnoise8192_int8.h> // recorded audio wavetable
 
+byte transpose = 0;
+byte octTranspose = 0;
+
+byte midiClockStepSize = 24;
+
+bool writeMode = false;
+bool ignoreLEDstate = false;
 byte noteToWrite = 0;
 byte octOffset = 0;
-byte sequence[64] = { 40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51 };
+byte sequence[256] = { 40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51 };
 unsigned int seqIncrement = 0; //counter to keep track of when next step should come
 byte seqCurrentStep = 0;
 byte midiClockTicks = 0;
 byte midiSeqNoteLength = 23;
 byte seqNoteLength = 60;
 byte midiClockDivider = 1;
-byte seqClockType = 0; //0 = Arcade only or midi clock or ext gate, 1 Internal clock
+bool internalClockSelect = false; //0 = Arcade only or midi clock or ext gate, 1 Internal clock
 unsigned int seqTempo = 120;
 //bool seqOn = true;  //SEQ I ALWAYS ON M8
 byte seqLength = 16;
@@ -68,7 +75,9 @@ const byte NOTEON = 0x09;
 const byte NOTEOFF = 0x08;
 const byte MCLOCKTICK = 0x03;
 
-int jitterfreq = 0;
+//int oldinternalClockSelect = 100;
+bool syncPulse = false;
+//int jitterfreq = 0;
 byte pageState = 0;
 float noteFreq = 0; //value to store current root freq of note
 char lfoOutput = 0; //value to store current offset from root
@@ -118,7 +127,7 @@ MIDI_CREATE_DEFAULT_INSTANCE();
 // use #define for CONTROL_RATE, not a constant
 
 #define CONTROL_RATE 128// powers of 2 please
-
+//#define AUDIO_RATE 32768
 
 // audio sinewave oscillator
 Oscil <SIN1024_NUM_CELLS, AUDIO_RATE> aSin(SIN1024_DATA);   //declare Oscillator
@@ -181,7 +190,7 @@ void lockKnobs() {
 
 
 #define TICK 15
-#define STOP 11
+#define RESTART 3
 
 void updateControl() {
 
@@ -238,14 +247,19 @@ void updateControl() {
 		
 		if (pageState == 3 && buttStates[BUTTON2]) {
 			writeToSeq();
-		} else {
+		} else if(!internalClockSelect){
 		playNextStep();
+		}
+		else {
+			seqCurrentStep = seqLength;
 		}
 
 		oldArcadeState = ArcadeState;
 	}
 	else if (!ArcadeState && oldArcadeState) {
-		HandleNoteOff(1, arcadeNote, 0);
+		if(!writeMode){
+		HandleNoteOff(arcadeNote, 0);
+		}
 		oldArcadeState = ArcadeState;
 	}
 
@@ -256,6 +270,7 @@ void updateControl() {
 
 
 	if (mozziRaw[FMknob] != oldMozziRaw[FMknob] && !knobLock[FMknob]) {
+		
 		int val = mozziRaw[FMknob];
 
 
@@ -277,8 +292,27 @@ void updateControl() {
 			envelope.setAttackTime(val + 18);
 			break;
 		case 3:
-			//LENGTH PERHAPS
-			//MODenvelope.setAttackTime(val+10);
+			if (internalClockSelect) {  
+				seqTempo = (val >> 3) + 3;       //SCALE DOWN
+				seqTempo = (seqTempo*-1) + 130;	 //INVERT
+			}
+			else {
+				byte divisor = (val >> 7)%4;	//divisor is 01230123
+
+				int tempVal = val - 512; //scale around 0;
+				if (tempVal <= 0) { 
+					
+					midiClockStepSize = 24 >> divisor;
+					//////Serial.print(" four ");
+				} else {
+					//divisor = 3 - divisor;
+					midiClockStepSize = 16 >> divisor;  
+					////Serial.print(" three ");
+
+				}
+				////Serial.print("divisor ");
+				////Serial.println(divisor);
+			}
 			break;
 
 		}
@@ -289,7 +323,7 @@ void updateControl() {
 
 
 	////////////////////////
-	//HANDLE HAXX KNOB    // 2
+	//HANDLE KNOB 2       // (FILTER)
 	////////////////////////
 
 	if (mozziRaw[h4xxKnob] != oldMozziRaw[h4xxKnob] && !knobLock[h4xxKnob]) {       //if h4xxknob was moved
@@ -316,37 +350,17 @@ void updateControl() {
 			envelope.setDecayTime(val);
 			break;
 		case 3:
-			if (buttStates[BUTTON1]) {
-				if (seqClockType != 2) {//val = 1024 - val; //invert val
-					//int divisor = val >> 1;
-					//seqNoteLength = seqTempo / divisor; //make notelength a division of val 
 					seqNoteLength = map(val, 0, 1024, 0, seqTempo);
-					//midiSeqNoteLength = map(val, 0, 1024, 0, 24);
 					midiSeqNoteLength = val >> 5; // scale val 0-32
-				}
-				else {
-					midiSeqNoteLength = map(val, 0, 1023, 0, 24);
-					//midiSeqNoteLength = val >> 5; // scale val 0-32
-				}
-			}
-			//determin clock mode and tempo
-			if (!buttStates[BUTTON1]) {
-				if (val < 4) {
-					seqClockType = 0;
-				}
-				else {
-					seqClockType = 1;				 //INTERNAL
-					seqTempo = (val >> 3) + 3;       //SCALE DOWN
-					seqTempo = (seqTempo*-1) + 130;	 //INVERT
-				}
-			}
+			
+			
 			break;
 		}
 		oldMozziRaw[h4xxKnob] = mozziRaw[h4xxKnob];
 	}
 
 	//////////////////////
-	//HANDLE ATTACK KNOB// 3
+	//HANDLE KNOB 3     // (MOD OCT)
 	//////////////////////
 	if (mozziRaw[attackKnob] != oldMozziRaw[attackKnob] && !knobLock[attackKnob]) { //if there was a change to attackKnob
 		int val = mozziRaw[attackKnob];
@@ -371,11 +385,8 @@ void updateControl() {
 					setWriteNote(val >> 6);
 				}
 				else {
-					//some other function !!
 				}
 
-				//	MODenvelope.setSustainLevel(val);
-				//	MODenvelope.setDecayLevel(val);
 				break;
 
 			default:
@@ -385,7 +396,7 @@ void updateControl() {
 		oldMozziRaw[attackKnob] = mozziRaw[attackKnob];
 	}
 	///////////////////////
-	//HANDLE KNOB    4   //
+	//HANDLE KNOB    4   // (waveform)
 	///////////////////////
 	if (mozziRaw[releaseKnob] != oldMozziRaw[releaseKnob] && !knobLock[releaseKnob]) { //if there was a change to releaseKnob
 		int val = mozziRaw[releaseKnob];
@@ -412,13 +423,13 @@ void updateControl() {
 			envelope.setReleaseTime(mozziRaw[releaseKnob]);
 			break;
 		case 3:
+			if (buttStates[BUTTON2]) {
 			if (val >> 7 != writeOctSelect) {
 				writeOctSelect = val >> 7; //0-8
-
 				refreshWriteNotePing = true;
-
 				setWriteNote(noteSelect);
 			}
+		}
 			break;
 
 		default:
@@ -495,7 +506,7 @@ void updateControl() {
 
 			//fm_intensity = (float(val));// *FMenvelope.next();
 			fm_intensity = (float((lfoOutput + 128)*modDepth));
-			jitterfreq = 0;
+			//jitterfreq = 0; 
 
 
 
@@ -505,7 +516,6 @@ void updateControl() {
 	int mod_freq = aSinFreq * mod_ratio;
 	aMod.setFreq(mod_freq);
 	handleSequencer();
-	
 }
 
 
