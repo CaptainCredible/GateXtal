@@ -24,7 +24,7 @@
 //const IntMap invert(0, 1024, 1024, 0);
 
 //TABLES
-//#include <tables/cos512_int8.h> // sine table for oscillator
+//#include <tables/cos512_int8.h> // sine table for oscillator 
 //#include <tables/cos2048_int8.h> // sine table for oscillator
 //#include <tables/sin2048_int8.h> // cosine table for oscillator
 #include <tables/sin1024_int8.h> // cosine table for oscillator
@@ -33,6 +33,8 @@
 #include <tables/square_analogue512_int8.h> // square table for oscillator
 #include <tables/sin512_int8.h> //lofi sine for LFO
 //#include <tables/brownnoise8192_int8.h> // recorded audio wavetable
+
+//ERIC
 
 int transpose = 0;
 int octTranspose = 0;
@@ -280,7 +282,7 @@ void updateControl() {
 	if (mozziRaw[FMknob] != oldMozziRaw[FMknob] && !knobLock[FMknob]) {
 
 		int val = mozziRaw[FMknob];
-
+		//
 
 
 		switch (pageState) {
