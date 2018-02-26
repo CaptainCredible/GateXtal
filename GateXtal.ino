@@ -140,7 +140,7 @@ Oscil <SIN512_NUM_CELLS, CONTROL_RATE> LFO(SIN512_DATA);    //LFO//
 
 
 // envelope generator
-ADSR <CONTROL_RATE, AUDIO_RATE> envelope;					//declare AMP env
+ADSR <CONTROL_RATE, AUDIO_RATE> envelope;					//declare AMP env // 
 LowPassFilter lpf;
 
 
