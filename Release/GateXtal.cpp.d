@@ -1,39 +1,83 @@
-C:\Users\Cpt.Cred\AppData\Local\Temp\VMBuilds\GateXtal\arcore_leonardo\Release\GateXtal.cpp.o: \
- C:\Users\Cpt.Cred\AppData\Local\Temp\VMBuilds\GateXtal\arcore_leonardo\Release\GateXtal.cpp \
- C:\Users\Cpt.Cred\AppData\Local\arduino15\packages\arcore\hardware\avr\1.0.0\cores\arcore/Arduino.h \
- C:\Users\Cpt.Cred\AppData\Local\arduino15\packages\arcore\hardware\avr\1.0.0\cores\arcore/binary.h \
- C:\Users\Cpt.Cred\AppData\Local\arduino15\packages\arcore\hardware\avr\1.0.0\cores\arcore/WCharacter.h \
- C:\Users\Cpt.Cred\AppData\Local\arduino15\packages\arcore\hardware\avr\1.0.0\cores\arcore/WString.h \
- C:\Users\Cpt.Cred\AppData\Local\arduino15\packages\arcore\hardware\avr\1.0.0\cores\arcore/HardwareSerial.h \
- C:\Users\Cpt.Cred\AppData\Local\arduino15\packages\arcore\hardware\avr\1.0.0\cores\arcore/Stream.h \
- C:\Users\Cpt.Cred\AppData\Local\arduino15\packages\arcore\hardware\avr\1.0.0\cores\arcore/Print.h \
- C:\Users\Cpt.Cred\AppData\Local\arduino15\packages\arcore\hardware\avr\1.0.0\cores\arcore/Printable.h \
- C:\Users\Cpt.Cred\AppData\Local\arduino15\packages\arcore\hardware\avr\1.0.0\cores\arcore/new.h \
- C:\Users\Cpt.Cred\AppData\Local\arduino15\packages\arcore\hardware\avr\1.0.0\cores\arcore/USBAPI.h \
- C:\Program\ Files\ (x86)\Arduino\hardware\arduino\avr\variants\leonardo/pins_arduino.h \
- C:\Users\Cpt.Cred\AppData\Local\arduino15\packages\arcore\hardware\avr\1.0.0\libraries/EEPROM\EEPROM.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\MIDI/MIDI.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\MIDI/midi_Defs.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\MIDI/midi_Namespace.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\MIDI/midi_Settings.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\MIDI/midi_Message.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\MIDI/MIDI.hpp \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/MozziGuts.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/mozzi_analog.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/mozzi_config.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/AudioConfigStandardPlus.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/Oscil.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/MozziGuts.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/mozzi_fixmath.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/mozzi_midi.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/ADSR.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/Line.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/LowPassFilter.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/mozzi_rand.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/Line.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/IntMap.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/tables/sin1024_int8.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/tables/saw2048_int8.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/tables/triangle2048_int8.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/tables/square_analogue512_int8.h \
- C:\Users\Cpt.Cred\Documents\Arduino\libraries\Mozzi/tables/sin512_int8.h
+D:\Users\Stoodio\ 2nd\AppData\Local\Temp\VMBuilds\GateXtal\Arduino_STM32-master_genericSTM32F103C\Release\GateXtal.cpp.o: \
+ D:\Users\Stoodio\ 2nd\AppData\Local\Temp\VMBuilds\GateXtal\Arduino_STM32-master_genericSTM32F103C\Release\GateXtal.cpp \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/arduino.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/wirish.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/WString.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/avr/pgmspace.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/avr/dtostrf.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/avr/interrupt.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/stm32.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/stm32f1/include/series/stm32.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/boards.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/libmaple_types.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/wirish_types.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/gpio.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/stm32f1/include/series/gpio.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/exti.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/stm32f1/include/series/exti.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/rcc.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/stm32f1/include/series/rcc.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/bitband.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/timer.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/stm32f1/include/series/timer.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/libmaple.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/util.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/delay.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/nvic.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/stm32f1/include/series/nvic.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/adc.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/stm32f1/include/series/adc.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\variants\generic_stm32f103c/board/board.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/io.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/bit_constants.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/pwm.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/ext_interrupts.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/wirish_debug.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/wirish_math.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/wirish_time.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/systick.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/wirish_constants.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/wiring_pulse.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/HardwareSerial.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/Print.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/WString.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/Printable.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/boards.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/Stream.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/HardwareTimer.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/usb_serial.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/WCharacter.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/tone.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/Arduino.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\variants\generic_stm32f103c/variant.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\libraries\EEPROM/EEPROM.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/wirish.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\libraries\EEPROM/flash_stm32.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\MIDI/MIDI.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\MIDI/midi_Defs.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\MIDI/midi_Namespace.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/Arduino.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\MIDI/midi_Settings.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\MIDI/midi_Message.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\MIDI/MIDI.hpp \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/MozziGuts.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/hardware_defines.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/mozzi_analog.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/mozzi_config.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/AudioConfigSTM32.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/Oscil.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/MozziGuts.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/mozzi_fixmath.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/util/atomic.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/mozzi_midi.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/ADSR.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/Line.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/LowPassFilter.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/mozzi_rand.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/Line.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/IntMap.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/tables/sin1024_int8.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/tables/saw2048_int8.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/tables/triangle2048_int8.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/tables/square_analogue512_int8.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/tables/sin512_int8.h

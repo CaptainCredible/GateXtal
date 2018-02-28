@@ -67,7 +67,7 @@ void handleMIDIClockStop() {
 
 
 void usbmidiprocessing(){
-
+	/*
 	while (MIDIUSB.available() > 0) {
 		MIDIEvent e = MIDIUSB.read();
 		
@@ -108,4 +108,5 @@ void usbmidiprocessing(){
 		}
 		
 	}
+	*/
 }
