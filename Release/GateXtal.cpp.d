@@ -1,70 +1,62 @@
 D:\Users\Stoodio\ 2nd\AppData\Local\Temp\VMBuilds\GateXtal\Arduino_STM32-master_genericSTM32F103C\Release\GateXtal.cpp.o: \
  D:\Users\Stoodio\ 2nd\AppData\Local\Temp\VMBuilds\GateXtal\Arduino_STM32-master_genericSTM32F103C\Release\GateXtal.cpp \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/arduino.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/wirish.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/WString.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/avr/pgmspace.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/avr/dtostrf.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/avr/interrupt.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/stm32.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/stm32f1/include/series/stm32.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/boards.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/libmaple_types.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/wirish_types.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/gpio.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/stm32f1/include/series/gpio.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/exti.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/stm32f1/include/series/exti.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/rcc.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/stm32f1/include/series/rcc.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/bitband.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/timer.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/stm32f1/include/series/timer.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/libmaple.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/util.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/delay.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/nvic.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/stm32f1/include/series/nvic.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/adc.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/stm32f1/include/series/adc.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\variants\generic_stm32f103c/board/board.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/io.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/bit_constants.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/pwm.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/ext_interrupts.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/wirish_debug.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/wirish_math.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/wirish_time.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/systick.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/wirish_constants.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/wiring_pulse.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/HardwareSerial.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/Print.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/WString.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/Printable.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/boards.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/Stream.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/HardwareTimer.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/usb_serial.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/WCharacter.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/tone.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/Arduino.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\variants\generic_stm32f103c/variant.h \
- D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\USBHID_stm32f1-edited\src/USBMIDI.h \
- D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\USBHID_stm32f1-edited\src/USBComposite.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/Stream.h \
- D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\USBHID_stm32f1-edited\src/usb_generic.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/usb/stm32f1/usb_lib_globals.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/usb/usb_lib/usb_type.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/usb/usb_lib/usb_core.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/usb.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\libraries\EEPROM/EEPROM.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/wirish.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\libraries\EEPROM/flash_stm32.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/arduino.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/wirish.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/WString.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/avr/pgmspace.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/avr/dtostrf.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/avr/interrupt.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/stm32.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/stm32f1/include/series/stm32.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/boards.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/libmaple_types.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/wirish_types.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/gpio.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/stm32f1/include/series/gpio.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/exti.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/stm32f1/include/series/exti.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/rcc.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/stm32f1/include/series/rcc.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/bitband.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/timer.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/stm32f1/include/series/timer.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/libmaple.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/util.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/delay.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/nvic.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/stm32f1/include/series/nvic.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/adc.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/stm32f1/include/series/adc.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\variants\generic_stm32f103c/board/board.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/io.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/bit_constants.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/pwm.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/ext_interrupts.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/wirish_debug.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/wirish_math.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/wirish_time.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/libmaple/systick.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/wirish_constants.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/wiring_pulse.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/HardwareSerial.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/Print.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/WString.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/Printable.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/boards.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/Stream.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/HardwareTimer.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/usb_serial.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/WCharacter.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/tone.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/Arduino.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\variants\generic_stm32f103c/variant.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\libraries\EEPROM/EEPROM.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/wirish.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\libraries\EEPROM/flash_stm32.h \
  D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\MIDI/MIDI.h \
  D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\MIDI/midi_Defs.h \
  D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\MIDI/midi_Namespace.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/Arduino.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\cores\maple/Arduino.h \
  D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\MIDI/midi_Settings.h \
  D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\MIDI/midi_Message.h \
  D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\MIDI/MIDI.hpp \
@@ -76,7 +68,7 @@ D:\Users\Stoodio\ 2nd\AppData\Local\Temp\VMBuilds\GateXtal\Arduino_STM32-master_
  D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/Oscil.h \
  D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/MozziGuts.h \
  D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/mozzi_fixmath.h \
- c:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/util/atomic.h \
+ C:\small\ software\arduino-1.8.4\hardware\Arduino_STM32-master\STM32F1\system/libmaple/include/util/atomic.h \
  D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/mozzi_midi.h \
  D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/ADSR.h \
  D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/Line.h \
