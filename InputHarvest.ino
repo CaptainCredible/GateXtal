@@ -1,3 +1,4 @@
+
 void getKnobStates() {
 	for (int i = 0; i < 4; i++) {
 		mozziRaw[i] = mozziAnalogRead(KNOBS[i])>>2; //get knobs
