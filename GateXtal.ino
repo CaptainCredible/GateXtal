@@ -13,8 +13,9 @@ bool debugToggle = true;
  */
 
  //LIBRARIES
+//#include <USBCompositeSerial.h>
+#include <USBMIDI.h>
 #include <EEPROM.h>
-//#include <EEPROM\EEPROM.h>
 #include <MIDI.h>
 #include <MozziGuts.h>
 #include <Oscil.h> // oscillator template
@@ -38,7 +39,6 @@ bool debugToggle = true;
 #include <tables/sin512_int8.h> //lofi sine for LFO
 //#include <tables/brownnoise8192_int8.h> // recorded audio wavetable
 
-//ERIC
 
 int transpose = 0;
 int octTranspose = 0;
@@ -158,9 +158,25 @@ void setUpMidi() {
 	MIDI.begin(MIDI_CHANNEL_OMNI); // Initiate MIDI communications, listen to all channels
 }
 
+class myMidi : public USBMidi {
+	virtual void handleNoteOff(unsigned int channel, unsigned int note, unsigned int velocity) {
+		HandleNoteOn(note, velocity);
+	}
+	virtual void handleNoteOn(unsigned int channel, unsigned int note, unsigned int velocity) {
+		HandleNoteOff(note, velocity);
+	}
+
+};
+
+myMidi umidi;
 
 void setup() {
-	debugPort.begin(250000);
+	//debugPort.begin(250000);
+	USBComposite.setProductId(0x20);
+	//umidi.registerComponent();
+	//CompositeSerial.registerComponent();
+	//USBComposite.begin();
+	umidi.begin();
 	pinMode(debugTogglePin, INPUT_PULLUP);
 
 
@@ -205,6 +221,7 @@ int count = 0;
 int globalVal = 0;
 
 void updateControl() {
+	umidi.poll();
 	debugToggle = digitalRead(debugTogglePin);
 	if (debugToggle) {
 		debug();
