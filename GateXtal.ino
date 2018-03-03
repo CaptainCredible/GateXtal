@@ -1,5 +1,5 @@
 
-//#define debugPort Serial
+#define debugPort CompositeSerial
 const int debugTogglePin = PB13;
 bool debugToggle = true;
 
@@ -130,8 +130,8 @@ int lockThresh = 50;
 #define BUTTON3 4
 #define deadzone 100 //dead zone / notch for bipolar values (on haxx)
 
-const int MIN_INTENSITY = 700;
-const int MAX_INTENSITY = 10;
+//const int MIN_INTENSITY = 700;
+//const int MAX_INTENSITY = 10;
 
 //MIDI_CREATE_DEFAULT_INSTANCE();
 MIDI_CREATE_INSTANCE(HardwareSerial, Serial1, MIDI);
@@ -175,18 +175,25 @@ void setUpMidi() {
 class gateMidi : public USBMidi {
     void handleNoteOff(unsigned int channel, unsigned int note, unsigned int velocity) {
       HandleNoteOff(note, velocity);
-      //noTone(SPEAKER_PIN);
     }
     void handleNoteOn(unsigned int channel, unsigned int note, unsigned int velocity) {
-      //tone(SPEAKER_PIN, (midiNoteFrequency_10ths[note] + 5) / 10);
       HandleNoteOn(note, velocity);
     }
+	
+	void handleSync() {
+		//do a sync
+	}
+
+
 
 };
 
 gateMidi umidi;
 
+
+
 void setup() {
+
   umidi.registerComponent();
   CompositeSerial.registerComponent();
   USBComposite.begin();
@@ -230,7 +237,12 @@ int count = 0;
 int globalVal = 0;
 
 void updateControl() {
-  debugToggle = digitalRead(debugTogglePin);
+	//CompositeSerial.println("Composite serial");
+	//debugPort.print(count);
+	//count++;
+	//debugPort.println(" Composite serial");
+
+  //debugToggle = digitalRead(debugTogglePin);
   if (debugToggle) {
     //debug();
   }
@@ -240,6 +252,7 @@ void updateControl() {
 #endif // PROMiCRO
 
   umidi.poll();
+  
 
   MIDI.read(); //check for DIN midi
 
@@ -271,7 +284,7 @@ void updateControl() {
 
 int updateAudio() {
   long modulation = fm_intensity * aMod.next();
-  char output = (envelope.next() * aSin.phMod(modulation)) >> 9;//9 is safe
+  //char output = (envelope.next() * aSin.phMod(modulation)) >> 9;//9 is safe
   //int output = aSin.next();
   int output = (envelope.next() * aSin.phMod(modulation)) >> 6;//9 is safe
   //int output = envelope.next() * aSin.next() >> 8;//9 is safe
