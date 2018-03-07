@@ -2,6 +2,9 @@
 void getKnobStates() {
 	for (int i = 0; i < 4; i++) {
 		mozziRaw[i] = mozziAnalogRead(KNOBS[i])>>2; //get knobs
+		//safeguard against noise!!!
+
+
 		if (knobLock[i]) {                       //if this knob is lock
 			if (mozziRaw[i] > lockAnchor[i] + lockThresh || mozziRaw[i] < lockAnchor[i] - lockThresh) { // if this knob has wandered far enough from the lock anchor, we can start listening to it
 				knobLock[i] = false;
@@ -78,8 +81,12 @@ void handleArcadeButt() {
 
 void handleKnob1() {
 	if (mozziRaw[FMknob] != oldMozziRaw[FMknob] && !knobLock[FMknob]) {
-
 		int val = mozziRaw[FMknob];
+
+		stringToPrint = "FM knob moved to ";
+		valToPrint = val;
+		somethingToPrint = true;
+		
 		//
 
 

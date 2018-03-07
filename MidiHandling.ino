@@ -34,6 +34,9 @@ void HandleDINNoteOff(byte channel, byte note, byte velocity) {
 }
 
 void HandleNoteOn(byte note, byte velocity) {
+	stringToPrint = "NoteON ";
+	valToPrint = note;
+	somethingToPrint = true;
 	if (note != 0) {   //if not zero
 		int octedNote = constrain(note + (octTranspose * 12), 0, 127);
 		noteIsOn = true;

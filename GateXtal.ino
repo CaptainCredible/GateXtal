@@ -1,6 +1,6 @@
 
 #define debugPort CompositeSerial
-const int debugTogglePin = PB13;
+const int debugTogglePin = PA3;
 bool debugToggle = true;
 
 /*
@@ -68,8 +68,8 @@ byte prevNoteSelect = 0;
 bool refreshWriteNotePing = false;
 
 Line <Q16n16> aInterpolate;
-int LEDS[4] = { 14, 15, 2, 3 };
-int BUTTONS[5] = { 4, 5, 6, 7, 8 };
+int LEDS[4] = { PB12, PB13, PB14, PB15 };
+int BUTTONS[5] = { PB3, PB4, PB5, PB6, PB7 };
 int KNOBS[4] = { 0, 1, 2, 3 };
 int mozziRaw[4] = { 0, 512, 512, 0 };
 int oldMozziRaw[4] = { 0, 0, 0, 0 };
@@ -116,8 +116,8 @@ int lockThresh = 50;
 
 
 //#define ARCADEBUTTON 16
-#define ARCADEBUTTON PB12
-#define LED 10 // shows if MIDI is being recieved, is also available as a gate output
+#define ARCADEBUTTON PA15
+#define LED PB11 // shows if MIDI is being recieved, is also available as a gate output
 #define minusButton 1
 #define plusButton 3
 #define FMknob  0
@@ -180,9 +180,6 @@ class gateMidi : public USBMidi {
 	}
 	void handleNoteOn(unsigned int channel, unsigned int note, unsigned int velocity) {
 		HandleNoteOn(note, velocity);
-		stringToPrint = "I changed it  and it's longer!  ";
-		valToPrint = note;
-		somethingToPrint = true;
 	}
 
 	void handleSync() {
@@ -216,9 +213,10 @@ void setup() {
 		pinMode(BUTTONS[i], INPUT_PULLUP);
 	}
 	pinMode(ARCADEBUTTON, INPUT_PULLUP);
-	for (int i = 0; i < 5; i++) {
-		//pinMode(LEDS[i], OUTPUT);
+	for (int i = 0; i < 4; i++) {
+		pinMode(LEDS[i], OUTPUT);
 	}
+	pinMode(LED, OUTPUT);
 	if (EEPROM.read(100) == 123) {
 		readSeqFromEeprom();
 	}
@@ -249,23 +247,23 @@ void updateControl() {
 
 	umidi.poll();
 
-	//MIDI.read(); //check for DIN midi
+	MIDI.read(); //check for DIN midi
 
-	//getKnobStates();
+	getKnobStates();
 
 	getButtStates();
 
-	//handlePageButts();
+	handlePageButts();
 
 	handleArcadeButt();
 
-	//handleKnob1();
+	handleKnob1();
 
-	//handleKnob2();
+	handleKnob2();
 
-	//handleKnob3();
+	handleKnob3();
 
-	//handleKnob4();
+	handleKnob4();
 
 	handleInternalCV();
 
@@ -279,19 +277,10 @@ void updateControl() {
 
 int updateAudio() {
 	long modulation = fm_intensity * aMod.next();
-	//char output = (envelope.next() * aSin.phMod(modulation)) >> 9;//9 is safe
-	//int output = aSin.next();
-	//int output = (envelope.next() * aSin.phMod(modulation)) >> 6;//9 is safe
-	int output = envelope.next() * aSin.next() >> 8;//9 is safe
+	int output = (envelope.next() * aSin.phMod(modulation)) >> 6;//9 is safe
 
-	//outPuTTY = output;
-	//output = lpf.next(output);       //TRY PUTTING THIS INLINE WITH THE REST! THEN TRY LIMITING IT WITH AN IF STATEMENT TO AVOID NASTY CLIPPING ARTEFACTS ??
+	output = lpf.next(output);       //TRY PUTTING THIS INLINE WITH THE REST! THEN TRY LIMITING IT WITH AN IF STATEMENT TO AVOID NASTY CLIPPING ARTEFACTS ??
 	return (int64_t)output;
-	//return output;
-
-	//return (int)(envelope.next() * aSin.phMod(modulation)) >> 9;
-	//  return (int) (envelope.next() * aSin.next())>>8;
-
 }
 
 
