@@ -138,7 +138,7 @@ MIDI_CREATE_INSTANCE(HardwareSerial, Serial1, MIDI);
 
 // use #define for CONTROL_RATE, not a constant
 
-#define CONTROL_RATE 1024// powers of 2 please
+#define CONTROL_RATE 512// powers of 2 please
 //#define AUDIO_RATE 32768
 
 // audio sinewave oscillator
@@ -151,12 +151,12 @@ Oscil <SIN512_NUM_CELLS, CONTROL_RATE> LFO(SIN512_DATA);    //LFO//
 ADSR <CONTROL_RATE, AUDIO_RATE> envelope;					//declare AMP env //
 LowPassFilter lpf;
 void setUpMidi() {
-  MIDI.setHandleNoteOn(HandleDINNoteOn);  // This is where we'll handle Hardware MIDI noteons (Put only the name of the function)
-  MIDI.setHandleNoteOff(HandleDINNoteOff);  // This is where well handle hardware midi noteoffs
-  MIDI.setHandleStart(handleMIDIClockStart);
-  MIDI.setHandleStop(handleMIDIClockStop);
-  MIDI.setHandleClock(handleMIDIClock);
-  MIDI.begin(MIDI_CHANNEL_OMNI); // Initiate MIDI communications, listen to all channels
+	MIDI.setHandleNoteOn(HandleDINNoteOn);  // This is where we'll handle Hardware MIDI noteons (Put only the name of the function)
+	MIDI.setHandleNoteOff(HandleDINNoteOff);  // This is where well handle hardware midi noteoffs
+	MIDI.setHandleStart(handleMIDIClockStart);
+	MIDI.setHandleStop(handleMIDIClockStop);
+	MIDI.setHandleClock(handleMIDIClock);
+	MIDI.begin(MIDI_CHANNEL_OMNI); // Initiate MIDI communications, listen to all channels
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -171,15 +171,20 @@ void setUpMidi() {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-
+bool somethingToPrint = false;
+char* stringToPrint = "default string";
+int valToPrint = 0;
 class gateMidi : public USBMidi {
-    void handleNoteOff(unsigned int channel, unsigned int note, unsigned int velocity) {
-      HandleNoteOff(note, velocity);
-    }
-    void handleNoteOn(unsigned int channel, unsigned int note, unsigned int velocity) {
-      HandleNoteOn(note, velocity);
-    }
-	
+	void handleNoteOff(unsigned int channel, unsigned int note, unsigned int velocity) {
+		HandleNoteOff(note, velocity);
+	}
+	void handleNoteOn(unsigned int channel, unsigned int note, unsigned int velocity) {
+		HandleNoteOn(note, velocity);
+		stringToPrint = "I changed it  and it's longer!  ";
+		valToPrint = note;
+		somethingToPrint = true;
+	}
+
 	void handleSync() {
 		//do a sync
 	}
@@ -194,41 +199,39 @@ gateMidi umidi;
 
 void setup() {
 
-  umidi.registerComponent();
-  CompositeSerial.registerComponent();
-  USBComposite.begin();
-  //debugPort.begin(250000);
-  
-  setUpMidi();
-
-  //pin setup
-  pinMode(debugTogglePin, INPUT_PULLUP);
-  pinMode(PA0, INPUT_ANALOG);
-  pinMode(PA1, INPUT_ANALOG);
-  pinMode(PA2, INPUT_ANALOG);
-  pinMode(PA3, INPUT_ANALOG);
-  for (int i = 0; i < 5; i++) {
-    pinMode(BUTTONS[i], INPUT_PULLUP);
-  }
-  pinMode(ARCADEBUTTON, INPUT_PULLUP);
-  for (int i = 0; i < 5; i++) {
-    //pinMode(LEDS[i], OUTPUT);
-  }
-  if (EEPROM.read(100) == 123) {
-    readSeqFromEeprom();
-  }
-
-  //mozzi setup
-  envelope.setADLevels(200, 240);			// attacks and decays need to be tweaked !!!!!!!!!!!!!!!!!!!!!!!!!!!
-  envelope.setTimes(10, 200, 65000, 10); // 65000 is so the note will sustain 65 seconds unless a noteOff comes (it's an unsigned int so it will will overflow at 65535)
-  aSin.setFreq(440); // default frequency
-  startMozzi(CONTROL_RATE);
-  lpf.setResonance(200);
-  lpf.setCutoffFreq(100);
-  LFO.setFreq(1);
+	umidi.registerComponent();
+	CompositeSerial.registerComponent();
+	USBComposite.begin();
 
 
-  digitalWrite(LEDS[pageState], HIGH); //show us what pagestate we are in
+	setUpMidi();
+
+	//pin setup
+	pinMode(debugTogglePin, INPUT_PULLUP);
+	pinMode(PA0, INPUT_ANALOG);
+	pinMode(PA1, INPUT_ANALOG);
+	pinMode(PA2, INPUT_ANALOG);
+	pinMode(PA3, INPUT_ANALOG);
+	for (int i = 0; i < 5; i++) {
+		pinMode(BUTTONS[i], INPUT_PULLUP);
+	}
+	pinMode(ARCADEBUTTON, INPUT_PULLUP);
+	for (int i = 0; i < 5; i++) {
+		//pinMode(LEDS[i], OUTPUT);
+	}
+	if (EEPROM.read(100) == 123) {
+		readSeqFromEeprom();
+	}
+
+	//mozzi setup
+	envelope.setADLevels(200, 240);			// attacks and decays need to be tweaked !!!!!!!!!!!!!!!!!!!!!!!!!!!
+	envelope.setTimes(10, 200, 65000, 10); // 65000 is so the note will sustain 65 seconds unless a noteOff comes (it's an unsigned int so it will will overflow at 65535)
+	aSin.setFreq(440); // default frequency
+	startMozzi(CONTROL_RATE);
+	lpf.setResonance(200);
+	lpf.setCutoffFreq(100);
+	LFO.setFreq(1);
+	digitalWrite(LEDS[pageState], HIGH); //show us what pagestate we are in
 }
 
 //debugVars
@@ -236,69 +239,69 @@ int outPuTTY = 0;
 int count = 0;
 int globalVal = 0;
 
+
+
 void updateControl() {
-	//CompositeSerial.println("Composite serial");
-	//debugPort.print(count);
-	//count++;
-	//debugPort.println(" Composite serial");
+	//debugToggle = digitalRead(debugTogglePin);
+	//if (debugToggle) {
+	  //debug();
+	//}
 
-  //debugToggle = digitalRead(debugTogglePin);
-  if (debugToggle) {
-    //debug();
-  }
+	umidi.poll();
 
-#ifdef PROMiCRO
-  usbmidiprocessing();
-#endif // PROMiCRO
+	//MIDI.read(); //check for DIN midi
 
-  umidi.poll();
-  
+	//getKnobStates();
 
-  MIDI.read(); //check for DIN midi
+	getButtStates();
 
-  //getKnobStates();
+	//handlePageButts();
 
-  getButtStates();
+	handleArcadeButt();
 
-  handlePageButts();
+	//handleKnob1();
 
-  handleArcadeButt();
+	//handleKnob2();
 
-  //handleKnob1();
+	//handleKnob3();
 
-  //handleKnob2();
+	//handleKnob4();
 
-  //handleKnob3();
+	handleInternalCV();
 
-  //handleKnob4();
+	if (pageState == 3) {
+		//	seqCheckButts(); //only if in seq mode
+	}
 
-  handleInternalCV();
-
-  if (pageState == 3) {
-    //	seqCheckButts(); //only if in seq mode
-  }
-
-  handleSequencer();
+	// handleSequencer();
 }
 
 
 int updateAudio() {
-  long modulation = fm_intensity * aMod.next();
-  //char output = (envelope.next() * aSin.phMod(modulation)) >> 9;//9 is safe
-  //int output = aSin.next();
-  int output = (envelope.next() * aSin.phMod(modulation)) >> 6;//9 is safe
-  //int output = envelope.next() * aSin.next() >> 8;//9 is safe
+	long modulation = fm_intensity * aMod.next();
+	//char output = (envelope.next() * aSin.phMod(modulation)) >> 9;//9 is safe
+	//int output = aSin.next();
+	//int output = (envelope.next() * aSin.phMod(modulation)) >> 6;//9 is safe
+	int output = envelope.next() * aSin.next() >> 8;//9 is safe
 
-  //outPuTTY = output;
-  output = lpf.next(output);       //TRY PUTTING THIS INLINE WITH THE REST! THEN TRY LIMITING IT WITH AN IF STATEMENT TO AVOID NASTY CLIPPING ARTEFACTS ??
-  //return (int64_t)output;
-  return output;
+	//outPuTTY = output;
+	//output = lpf.next(output);       //TRY PUTTING THIS INLINE WITH THE REST! THEN TRY LIMITING IT WITH AN IF STATEMENT TO AVOID NASTY CLIPPING ARTEFACTS ??
+	return (int64_t)output;
+	//return output;
 
-  //return (int)(envelope.next() * aSin.phMod(modulation)) >> 9;
-  //  return (int) (envelope.next() * aSin.next())>>8;
+	//return (int)(envelope.next() * aSin.phMod(modulation)) >> 9;
+	//  return (int) (envelope.next() * aSin.next())>>8;
+
 }
 
 
 void loop() {
-  audioHook(); // required here
+	audioHook(); // required here
+
+
+	if (somethingToPrint) {
+		debugPort.print(stringToPrint);
+		debugPort.println(valToPrint);
+		somethingToPrint = false;
+	}
 }
