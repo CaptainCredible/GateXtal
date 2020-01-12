@@ -86,6 +86,7 @@ D:\Users\Stoodio\ 2nd\AppData\Local\Temp\VMBuilds\GateXtal\Arduino_STM32-master_
  D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/LowPassFilter.h \
  D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/mozzi_rand.h \
  D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/Line.h \
+ D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/Smooth.h \
  D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/IntMap.h \
  D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/tables/sin1024_int8.h \
  D:\Users\Stoodio\ 2nd\Documents\Arduino\libraries\Mozzi-master/tables/saw2048_int8.h \

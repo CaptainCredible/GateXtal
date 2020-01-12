@@ -25,6 +25,7 @@ bool debugToggle = true;
 #include <LowPassFilter.h>
 #include <mozzi_rand.h>
 #include <Line.h>
+#include <Smooth.h>
 #include <IntMap.h>
 //const IntMap invert(0, 1024, 1024, 0);
 
@@ -93,6 +94,7 @@ float aSinFreq = 440; //value to store current final oscillator frequency
 int mod_freq = 440;
 int mod_ratio = 3;
 long fm_intensity = 0;
+
 byte waveformselect = 0;
 byte lastNote = 0;
 //float modToFMIntensity = 0;
@@ -271,14 +273,13 @@ void updateControl() {
 		//	seqCheckButts(); //only if in seq mode
 	}
 
-	// handleSequencer();
+	 handleSequencer();
 }
 
 
 int updateAudio() {
 	long modulation = fm_intensity * aMod.next();
 	int output = (envelope.next() * aSin.phMod(modulation)) >> 6;//9 is safe
-
 	output = lpf.next(output);       //TRY PUTTING THIS INLINE WITH THE REST! THEN TRY LIMITING IT WITH AN IF STATEMENT TO AVOID NASTY CLIPPING ARTEFACTS ??
 	return (int64_t)output;
 }

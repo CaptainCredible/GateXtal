@@ -1,7 +1,15 @@
 
 void getKnobStates() {
 	for (int i = 0; i < 4; i++) {
-		mozziRaw[i] = mozziAnalogRead(KNOBS[i])>>2; //get knobs
+		int currentVal = mozziAnalogRead(KNOBS[i]);
+		int currentDiff = currentVal - mozziRaw[i];
+		if (abs(currentDiff) >= 50) {
+			valToPrint = currentVal>>2;
+			mozziRaw[i] = currentVal; //get knobs
+		}
+
+
+
 		//safeguard against noise!!!
 
 
@@ -21,13 +29,10 @@ void getButtStates() {
 	}
 
 	ArcadeState = !digitalRead(ARCADEBUTTON);
-	//Serial3.print(ArcadeState);
-	//Serial3.print(" ");
-
 }
 
 void handlePageButts() {
-	
+
 	if (buttStates[minusButton] && !oldButtStates[minusButton]) { //if page- button pressed and it wasn't previously pressed
 		lockKnobs();
 		pageState--;
@@ -79,20 +84,24 @@ void handleArcadeButt() {
 
 }
 
+float smoothness = 0.995f;
+Smooth <unsigned int> mySmoothKnob1(smoothness);
+
 void handleKnob1() {
 	if (mozziRaw[FMknob] != oldMozziRaw[FMknob] && !knobLock[FMknob]) {
+		//int val = mySmoothKnob1.next(mozziRaw[FMknob]>>2);
 		int val = mozziRaw[FMknob];
-
-		stringToPrint = "FM knob moved to ";
-		valToPrint = val;
+		stringToPrint = "FM knob moved ";
 		somethingToPrint = true;
-		
+
 		//
 
 
 		switch (pageState) {
 		case 0:
-			fm_intensity = (float(val));// *FMenvelope.next();
+			//fm_intensity = (float(val));// *FMenvelope.next();
+			fm_intensity = val>>2;// *FMenvelope.next();
+
 			break;
 		case 1:
 			rndFreq = (val*-1 + 1024) << 5; //invert and scale down
@@ -144,7 +153,7 @@ void handleKnob2() {
 	////////////////////////
 
 	if (mozziRaw[h4xxKnob] != oldMozziRaw[h4xxKnob] && !knobLock[h4xxKnob]) {       //if h4xxknob was moved
-		int val = mozziRaw[h4xxKnob];
+		int val = mozziRaw[h4xxKnob] >> 2;
 
 
 
@@ -182,7 +191,7 @@ void handleKnob3() {
 	//HANDLE KNOB 3     // (MOD OCT)
 	//////////////////////
 	if (mozziRaw[attackKnob] != oldMozziRaw[attackKnob] && !knobLock[attackKnob]) { //if there was a change to attackKnob
-		int val = mozziRaw[attackKnob];
+		int val = mozziRaw[attackKnob] >> 2;
 		globalVal = val;
 		switch (pageState) {           //knob does different things depending on pagestate
 		case 0:
@@ -242,7 +251,7 @@ void handleKnob4() {
 	//HANDLE KNOB    4   // (waveform)
 	///////////////////////
 	if (mozziRaw[releaseKnob] != oldMozziRaw[releaseKnob] && !knobLock[releaseKnob]) { //if there was a change to releaseKnob
-		int val = mozziRaw[releaseKnob];
+		int val = mozziRaw[releaseKnob] >> 2;
 		switch (pageState) {           //knob does different things depending on pagestate
 
 		case 0:
@@ -301,76 +310,76 @@ void handleKnob4() {
 
 }
 
-void handleInternalCV(){
+void handleInternalCV() {
 	//HANDLE INTERNAL "CV"
 	envelope.update();
 
-if (offsetOn) {
-	if (LFOWaveSelect == 0) {
-		lfoOutput = LFO.next();
+	if (offsetOn) {
+		if (LFOWaveSelect == 0) {
+			lfoOutput = LFO.next();
+		}
+		else {
+			//RANDOM
+
+			if (mozziMicros() - rndTimer > (rndFreq << 3)) {
+				int lfoOutputBUFFER = rand(0, 244); //if depth adjusts this we can skip a float calc later
+													//int lfoOutputBUFFER = rand(0, mozziRaw[1]); //if depth adjusts this we can skip a float calc later
+													//int slew = ((invert(mozziRaw[3]))>>2)+1; //invert the value and drop it down by two bits and make sure it doesnt go under 1
+				HDlfoOutputBuffer = Q16n0_to_Q16n16(lfoOutputBUFFER);
+				rndTimer = mozziMicros();
+
+			}
+			Q16n16 slew = ((mozziRaw[3] >> 2)*-1) + 256;
+			aInterpolate.set(HDlfoOutputBuffer, slew);
+			Q16n16 interpolatedLfoOutputBUFFER = aInterpolate.next();
+			lfoOutput = Q16n16_to_Q16n0(interpolatedLfoOutputBUFFER) - 128; //scaled back down to int and offset to -128 to 128
+
+
+		}
+
+		if (lfoDest == 0) {
+			aSinFreq = noteFreq + (lfoOutput * modDepth);
+			aSin.setFreq(aSinFreq);
+		}
+		else {
+			aSinFreq = noteFreq;
+		}
+
+		if (lfoDest == 1) {
+
+
+			int cutoffBuffer = lpfCutoff + (lfoOutput + 126 * modDepth);
+			if (cutoffBuffer < 0) {
+				cutoffBuffer = 0;
+			}
+			else if (cutoffBuffer > 254) {
+				cutoffBuffer = 254;
+			}
+			//lpfCutoff = (lfoOutput + 126)*modDepth;
+			lpf.setCutoffFreq(cutoffBuffer);
+		}
+		if (lfoDest == 2) {
+
+			//fm_intensity = (float(val));// *FMenvelope.next();
+			fm_intensity = (float((lfoOutput + 128)*modDepth));
+			//jitterfreq = 0; 
+
+
+
+		}
+	}
+	if (mod_ratio < 8) {
+		byte temp = 8 - mod_ratio;
+		mod_freq = aSinFreq;
+		mod_freq = mod_freq >> temp;
+
 	}
 	else {
-		//RANDOM
-
-		if (mozziMicros() - rndTimer > (rndFreq << 3)) {
-			int lfoOutputBUFFER = rand(0, 244); //if depth adjusts this we can skip a float calc later
-												//int lfoOutputBUFFER = rand(0, mozziRaw[1]); //if depth adjusts this we can skip a float calc later
-												//int slew = ((invert(mozziRaw[3]))>>2)+1; //invert the value and drop it down by two bits and make sure it doesnt go under 1
-			HDlfoOutputBuffer = Q16n0_to_Q16n16(lfoOutputBUFFER);
-			rndTimer = mozziMicros();
-
-		}
-		Q16n16 slew = ((mozziRaw[3] >> 2)*-1) + 256;
-		aInterpolate.set(HDlfoOutputBuffer, slew);
-		Q16n16 interpolatedLfoOutputBUFFER = aInterpolate.next();
-		lfoOutput = Q16n16_to_Q16n0(interpolatedLfoOutputBUFFER) - 128; //scaled back down to int and offset to -128 to 128
-
+		byte temp = mod_ratio - 7;
+		mod_freq = aSinFreq * temp;
 
 	}
-
-	if (lfoDest == 0) {
-		aSinFreq = noteFreq + (lfoOutput * modDepth);
-		aSin.setFreq(aSinFreq);
-	}
-	else {
-		aSinFreq = noteFreq;
-	}
-
-	if (lfoDest == 1) {
-
-
-		int cutoffBuffer = lpfCutoff + (lfoOutput + 126 * modDepth);
-		if (cutoffBuffer < 0) {
-			cutoffBuffer = 0;
-		}
-		else if (cutoffBuffer > 254) {
-			cutoffBuffer = 254;
-		}
-		//lpfCutoff = (lfoOutput + 126)*modDepth;
-		lpf.setCutoffFreq(cutoffBuffer);
-	}
-	if (lfoDest == 2) {
-
-		//fm_intensity = (float(val));// *FMenvelope.next();
-		fm_intensity = (float((lfoOutput + 128)*modDepth));
-		//jitterfreq = 0; 
-
-
-
-	}
-}
-if (mod_ratio < 8) {
-	byte temp = 8 - mod_ratio;
-	mod_freq = aSinFreq;
-	mod_freq = mod_freq >> temp;
-
-}
-else {
-	byte temp = mod_ratio - 7;
-	mod_freq = aSinFreq * temp;
-
-}
-aMod.setFreq(mod_freq);
+	aMod.setFreq(mod_freq);
 }
 
 void lockKnobs() {
