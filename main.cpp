@@ -4,18 +4,18 @@
   By Daniel Lacey a.k.a. Captain Credible
 
   PINOUT (GPIO numbers as printed on the SuperMini):
-    BUTTON1 ........ 11   (all buttons to GND, internal pullups)
-    BUTTON2 ........ 12
-    BUTTON3 ........ 13
-    PAGE button ..... 1   (single button, cycles the 6 pages:
-                           SYNTH / LFO / ENV / SEQ / VERB / SET)
+    A button ..... 11   (all buttons to GND, internal pullups)
+    B button ..... 12
+    SHIFT button . 13   (held = alternate knob functions on every page)
+    PAGE button .. 1   (single button, cycles the 6 pages:
+                           MAIN / AMPENV / LFO / VERB / H4XX / SEQ)
     ARCADE button .. 43   (the "TX" pin — plain GPIO once booted; the boot ROM
                            chatters on it for ~100ms at reset, harmless for a
                            button. A 470R-1k series resistor is cheap insurance
                            against holding it during reset.)
     POTS ....... 2,3,4,5  (FM / haxx / attack / release — all ADC1)
     MIDI DIN in .... 44   (the "RX" pin, optional — RX only, TX stays free)
-
+ 
     PCM5102A:
       BCK ... 10
       LCK .... 8   (word select / LRCLK)
@@ -36,7 +36,7 @@
       mode = MIDI clock or stepping manually with the arcade button, as before.
     - USB-MIDI via the S3's native USB (enumerates as "GateXtal"); DIN MIDI in kept.
       Needs ARDUINO_USB_MODE=0 (USB-OTG/TinyUSB) — set in platformio.ini.
-    - EEPROM is flash-emulated on ESP32: begin() + commit() required.
+    - EEPROM is flash-emulated on ESP32: begin() + commit() required.π
 */
 
 #include <Arduino.h>
@@ -45,6 +45,7 @@
 #include <MozziConfigValues.h>
 #define MOZZI_AUDIO_MODE   MOZZI_OUTPUT_I2S_DAC
 #define MOZZI_AUDIO_BITS   16
+#define MOZZI_AUDIO_CHANNELS MOZZI_STEREO // stereo out: dry stays centred, reverb is widened
 #define MOZZI_I2S_PIN_BCK  10
 #define MOZZI_I2S_PIN_WS   8
 #define MOZZI_I2S_PIN_DATA 9
@@ -110,11 +111,11 @@
 #define OLED_ADDR    0x3C
 Adafruit_SSD1306 oled(128, 64, &Wire, -1);
 
-int BUTTONS[4] = { 11, 12, 13, 1 };
-#define BUTTON1    0
-#define BUTTON2    1
-#define BUTTON3    2
-#define PAGEBUTTON 3
+int BUTTONS[4] = { 11, 12, 13, 1 }; // index -> GPIO
+#define BTN_A     0 // pin 11
+#define BTN_B     1 // pin 12
+#define BTN_SHIFT 2 // pin 13 — held = alt knob functions
+#define BTN_PAGE  3 // pin 1  — cycles pages
 
 int KNOBS[4] = { 2, 3, 4, 5 };
 #define FMknob      0
@@ -132,7 +133,7 @@ int KNOBS[4] = { 2, 3, 4, 5 };
 #define EE_PRESET_ADDR   260  // preset slots live above the sequence
 #define EE_PRESET_STRIDE 96   // bytes per slot (struct is ~72, rounded up for future fields)
 #define NUM_PRESETS      10   // 260 + 10*96 = 1220, fits EEPROM_SIZE with room to spare
-#define PRESET_MAGIC     0x44 // bumped when the struct layout changes: old presets read as empty
+#define PRESET_MAGIC     0x45 // bumped when the struct layout changes: old presets read as empty
 
 struct Preset { // everything that makes the sound; saved/loaded on the SET page
 	byte magic;
@@ -140,8 +141,8 @@ struct Preset { // everything that makes the sound; saved/loaded on the SET page
 	byte lpfCutoff, lpfRes;
 	byte mod_ratio;
 	byte lfoDest, lfoWaveSelect;
-	byte bit7, envFilterAmt;
-	byte env2FM, env2Filt, env2Ratio, env2Mix; // ENV2 routing amounts
+	byte bit7;
+	byte env2FM, env2Filt, env2Ratio; // ENV2 routing amounts (FM / filter / ratio)
 	byte polyFilt; // 0 = PARA (one filter on the sum), 1 = POLY (filter per voice)
 	int32_t fmIntensity;
 	int16_t attack, decay, sustain, release;         // ENV1 (amp)
@@ -149,6 +150,7 @@ struct Preset { // everything that makes the sound; saved/loaded on the SET page
 	float lfoRate, modDepth;
 	float rvSize, rvDamp, rvMix;
 	float oscVol, limThresh;
+	float rvSpread; // reverb stereo width; appended last so old presets stay readable
 };
 static_assert(sizeof(Preset) <= EE_PRESET_STRIDE, "Preset struct outgrew its EEPROM slot");
 
@@ -188,6 +190,9 @@ bool oldArcadeState = false;
 bool noteIsOn = false; // keep track of number of playing notes
 
 byte pageState = 0;
+// page order (the PAGE button cycles these). Reorder the whole UI by renumbering
+// here — every switch/if below keys off these names, not raw case numbers.
+enum Page { PG_MAIN = 0, PG_ENV, PG_LFO, PG_VERB, PG_HAXX, PG_SEQ, PG_COUNT };
 int8_t lfoOutput = 0;  // value to store current offset from root
 int mod_ratio = 3;
 long fm_intensity = 0;
@@ -198,7 +203,9 @@ float freeq = 0;
 bool offsetOn = false;
 byte lfoDest = 0;
 byte lpfCutoff = 100;
-byte LFOWaveSelect = 0;
+byte lfoMode = 0;      // LFO shape (A cycles): 0 = sine..saw morph,
+                       // 1 = RND (slewed random), 2 = STAT (silence + crackle)
+int statVal = 128;     // STAT mode running level, 0..255 (128 = centre/silence)
 unsigned long rndTimer = 0;
 long int rndFreq = 0;
 Q16n16 HDlfoOutputBuffer = 0; // this is a big type for slew manipulation
@@ -234,7 +241,6 @@ struct Voice {
 	float freq = 0;         // base carrier freq incl. oct transpose
 	unsigned long age = 0;  // allocation order, for voice stealing
 	long fmNow = 0;         // fm_intensity + this voice's ENV2 FM contribution
-	int sendI = 0;          // reverb send 0..254, from this voice's ENV2 via the VERBMIX routing
 };
 Voice voices[NUM_VOICES];
 unsigned long voiceAge = 0;
@@ -247,6 +253,7 @@ bool polyFilter = false; // VERB page knob 4: PARA = one filter on the sum (clas
 Freeverb reverb; // ~37KB of delay lines, lives in .bss
 float rvSize = 0.72f, rvDamp = 0.45f; // VERB page values (defaults match Freeverb ctor)
 float rvMix = 0.5f;   // VERB page knob 3: single wet/dry crossfade (dry full below center, wet full above)
+float rvSpread = 1.0f; // VERB page knob 4: reverb stereo width (0 = mono, 1 = natural, up to 8 = absurd)
 float dryNow = 1.0f;  // effective dry gain this tick, from the rvMix law
 float wetBase = 1.0f; // base reverb input gain, from the rvMix law (ENV2 sends ride on top)
 
@@ -255,11 +262,9 @@ float wetBase = 1.0f; // base reverb input gain, from the rvMix law (ENV2 sends 
 // routing view where the knobs set the four destination amounts.
 byte envSelect = 0;        // ENV page: 0 = knobs edit ENV1 (amp), 1 = knobs edit ENV2
 bool envRouteView = false; // ENV page: B3 toggles the ENV2 routing view
-byte env2FM = 0, env2Filt = 0, env2Ratio = 0, env2Mix = 0;   // routing amounts, 0-255
+byte env2FM = 0, env2Filt = 0, env2Ratio = 0;   // routing amounts, 0-255 (reverb send removed)
 int e2Attack = 100, e2Decay = 200, e2Sustain = 240, e2Release = 200; // OLED shadows for ENV2
-bool bit7Mode = false; // SET page: crush the synth back to the old AVR's ~7-bit resolution, for crunch
-byte envFilterAmt = 0; // SET page: how much the amp envelope pushes the filter cutoff up (0-255)
-int envPeak = 0;       // loudest voice-envelope level this control tick, captured in updateAudio()
+bool bit7Mode = false; // H4XX page: crush the synth back to the old AVR's ~7-bit resolution, for crunch
 
 // output stage (post reverb mix): peak limiter into a tanh-shaped saturator.
 // Single notes pass untouched, stacked voices get transparently ducked, and
@@ -294,9 +299,19 @@ void lockKnobs();
 // Note/MIDI activity light on the SuperMini's onboard neopixel (GPIO48).
 // rgbLedWrite() drives it via RMT, same as digitalWrite(LED_BUILTIN) in the
 // Arduino IDE; RGB_BUILTIN comes from the esp32s3 board variant.
-void writeLED(bool state) {
+
+void writeNoteLED(byte note) { // color the LED by the pressed note's pitch class:
+                               // red (C) ramping through orange to yellow (B),
+                               // one full red->yellow sweep per octave
 #ifdef RGB_BUILTIN
-	rgbLedWrite(RGB_BUILTIN, 0, state ? RGB_BRIGHTNESS : 0, 0); // green = note on
+	byte g = (uint16_t)(note % 12) * RGB_BRIGHTNESS / 11; // green rises 0..full
+	rgbLedWrite(RGB_BUILTIN, RGB_BRIGHTNESS, g, 0);
+#endif
+}
+
+void writeLED(bool state) { // used for note-off (green kept for any non-note use)
+#ifdef RGB_BUILTIN
+	rgbLedWrite(RGB_BUILTIN, 0, state ? RGB_BRIGHTNESS : 0, 0);
 #endif
 }
 
@@ -335,7 +350,7 @@ void HandleNoteOn(byte note, byte velocity) {
 		v->env.noteOn();
 		v->env2.noteOn(); // this voice's own mod envelope
 		noteIsOn = true;
-		writeLED(true);
+		writeNoteLED(note);
 		lastNote = note;
 	}
 }
@@ -367,40 +382,127 @@ void HandleNoteOff(byte note, byte velocity) {
 	if (!anyHeld) writeLED(false);
 }
 
-// --- remote bootloader entry ---------------------------------------------
-// SysEx F0 7D 47 58 42 F7 ("GXB" under the educational/non-commercial ID)
-// reboots into the ROM's USB download mode, same as holding BOOT while
-// tapping RESET — so reflashing needs no fingers on the device.
-const byte BOOT_SYSEX[6] = { 0xF0, 0x7D, 0x47, 0x58, 0x42, 0xF7 };
+// --- SysEx protocol -------------------------------------------------------
+// All GateXtal SysEx shares the header  F0 7D 47 58 <cmd> ...  F7
+//   7D       = the educational / non-commercial manufacturer ID
+//   47 58    = "GX"
+//   <cmd>    = one ASCII byte selecting the operation:
+//     'B' 0x42  reboot to bootloader   F0 7D 47 58 42 F7            (host->dev)
+//     'D' 0x44  dump request           F0 7D 47 58 44 <slot> F7     (host->dev)
+//                 slot 0..9 dumps that slot; 0x7F dumps every used slot.
+//     'P' 0x50  preset payload         F0 7D 47 58 50 <slot> <nibbles..> F7
+//                 sent by the device in reply to a dump, or by the host to
+//                 store a preset into a slot. The Preset struct is carried
+//                 low-nibble-first: each raw byte becomes two 4-bit data
+//                 bytes so everything stays inside SysEx's 7-bit limit.
+const byte GX_ID0 = 0x7D, GX_ID1 = 0x47, GX_ID2 = 0x58;
+#define GX_CMD_BOOT    0x42
+#define GX_CMD_DUMPREQ 0x44
+#define GX_CMD_PRESET  0x50
+#define GX_DUMP_ALL    0x7F
+
+// backwards-compatible name for the old 6-byte bootloader magic
+const byte BOOT_SYSEX[6] = { 0xF0, GX_ID0, GX_ID1, GX_ID2, GX_CMD_BOOT, 0xF7 };
 
 void rebootToBootloader() {
 	usb_persist_restart(RESTART_BOOTLOADER); // keeps USB alive across the reboot
 }
 
-byte syxBuf[8];
+// Send a raw SysEx byte stream (F0..F7) out over USB-MIDI, packed into the
+// standard 4-byte USB-MIDI packets (CIN 4 = mid-stream, 5/6/7 = final 1/2/3
+// bytes). Spins briefly if the TinyUSB FIFO is full rather than dropping data.
+void sendSysExOut(const byte* d, int len) {
+	int i = 0;
+	while (i < len) {
+		int rem = len - i;
+		midiEventPacket_t p = { 0, 0, 0, 0 };
+		if (rem > 3) { p.header = 0x04; p.byte1 = d[i]; p.byte2 = d[i + 1]; p.byte3 = d[i + 2]; i += 3; }
+		else if (rem == 3) { p.header = 0x07; p.byte1 = d[i]; p.byte2 = d[i + 1]; p.byte3 = d[i + 2]; i += 3; }
+		else if (rem == 2) { p.header = 0x06; p.byte1 = d[i]; p.byte2 = d[i + 1]; i += 2; }
+		else { p.header = 0x05; p.byte1 = d[i]; i += 1; }
+		for (int tries = 0; !usbMIDI.writePacket(&p) && tries < 20000; tries++) delayMicroseconds(50);
+	}
+}
+
+// Read slot `slot` from EEPROM and, if it holds a patch, dump it as a 'P'
+// message. Empty slots are silently skipped.
+void dumpPreset(byte slot) {
+	if (slot >= NUM_PRESETS) return;
+	Preset p;
+	EEPROM.get(EE_PRESET_ADDR + slot * EE_PRESET_STRIDE, p);
+	if (p.magic != PRESET_MAGIC) return; // nothing saved in this slot
+	const byte* raw = (const byte*)&p;
+	byte out[7 + 2 * sizeof(Preset)];
+	int n = 0;
+	out[n++] = 0xF0; out[n++] = GX_ID0; out[n++] = GX_ID1; out[n++] = GX_ID2;
+	out[n++] = GX_CMD_PRESET; out[n++] = slot;
+	for (size_t k = 0; k < sizeof(Preset); k++) {
+		out[n++] = raw[k] & 0x0F;
+		out[n++] = (raw[k] >> 4) & 0x0F;
+	}
+	out[n++] = 0xF7;
+	sendSysExOut(out, n);
+}
+
+// Decode a 'P' message and store the carried preset into its slot. Rejects
+// wrong sizes / bad magic so a truncated or foreign SysEx can't corrupt a slot.
+void storePresetFromSysEx(const byte* buf, int len) {
+	byte slot = buf[5];
+	if (slot >= NUM_PRESETS) return;
+	int nib = len - 7; // strip F0 + 3 ID + cmd + slot + F7
+	if (nib != (int)(2 * sizeof(Preset))) return;
+	Preset p;
+	byte* raw = (byte*)&p;
+	for (size_t k = 0; k < sizeof(Preset); k++) {
+		raw[k] = (buf[6 + 2 * k] & 0x0F) | ((buf[6 + 2 * k + 1] & 0x0F) << 4);
+	}
+	if (p.magic != PRESET_MAGIC) return; // not one of ours / stale layout
+	EEPROM.put(EE_PRESET_ADDR + slot * EE_PRESET_STRIDE, p);
+	EEPROM.commit();
+	presetUsed[slot] = true;
+	presetMsg = 4; // "SYSEX RX" footer hint
+	presetMsgUntil = millis() + 1200;
+}
+
+// Dispatch a complete SysEx message (framing included) to the right handler.
+void handleSysExMessage(const byte* buf, int len) {
+	if (len == sizeof(BOOT_SYSEX) && memcmp(buf, BOOT_SYSEX, len) == 0) {
+		rebootToBootloader();
+		return;
+	}
+	if (len < 6) return;
+	if (buf[0] != 0xF0 || buf[1] != GX_ID0 || buf[2] != GX_ID1 || buf[3] != GX_ID2) return;
+	switch (buf[4]) {
+		case GX_CMD_DUMPREQ:
+			if (buf[5] == GX_DUMP_ALL) { for (byte s = 0; s < NUM_PRESETS; s++) dumpPreset(s); }
+			else dumpPreset(buf[5]);
+			break;
+		case GX_CMD_PRESET:
+			storePresetFromSysEx(buf, len);
+			break;
+	}
+}
+
+byte syxBuf[208]; // header(6) + slot + 2*sizeof(Preset) nibbles + F7, with headroom
 byte syxLen = 0;
 
 void syxByte(byte b) { // feed one byte of a USB-MIDI SysEx stream
 	if (b == 0xF0) syxLen = 0; // message start
 	if (syxLen < sizeof(syxBuf)) syxBuf[syxLen++] = b;
-	if (b == 0xF7) { // message end: check for the magic
-		if (syxLen == sizeof(BOOT_SYSEX) && memcmp(syxBuf, BOOT_SYSEX, syxLen) == 0) {
-			rebootToBootloader();
-		}
+	if (b == 0xF7) { // message end: dispatch what we buffered
+		handleSysExMessage(syxBuf, syxLen);
 		syxLen = 0;
 	}
 }
 
 void HandleDINSysEx(byte* data, unsigned length) { // includes the F0/F7 framing
-	if (length == sizeof(BOOT_SYSEX) && memcmp(data, BOOT_SYSEX, length) == 0) {
-		rebootToBootloader();
-	}
+	handleSysExMessage(data, (int)length);
 }
 // ---------------------------------------------------------------------------
 
 void HandleDINNoteOn(byte channel, byte note, byte velocity) {
 	HandleNoteOn(note, velocity);
-	if (pageState == 3 && buttStates[BUTTON2]) {
+	if (pageState == PG_SEQ && buttStates[BTN_B]) {
 		noteToWrite = note;
 		writeToSeq();
 	}
@@ -455,7 +557,7 @@ void usbmidiprocessing() {
 		// NOTE ON WITH VELOCITY GREATER THAN ZERO
 		if (cin == 0x09 && e.byte3 > 0) {
 			HandleNoteOn(e.byte2, e.byte3);
-			if (pageState == 3 && buttStates[BUTTON2]) {
+			if (pageState == PG_SEQ && buttStates[BTN_B]) {
 				noteToWrite = e.byte2;
 				writeToSeq();
 			}
@@ -590,17 +692,17 @@ void readSeqFromEeprom() {
 bool EEPROMwriting = false;    // flag to ignore all buttons until every button is released
 void seqCheckButts() {
 	if (EEPROMwriting) {
-		if (!(buttStates[BUTTON1] || buttStates[BUTTON2] || buttStates[BUTTON3])) {
+		if (!(buttStates[BTN_A] || buttStates[BTN_B] || buttStates[BTN_SHIFT])) {
 			EEPROMwriting = false;
 		}
 	}
 	else {
 
-		// BUTTON1
+		// BTN_A
 
-		if (buttStates[BUTTON1] && !oldButtStates[BUTTON1]) {
-			oldButtStates[BUTTON1] = buttStates[BUTTON1];
-			if (buttStates[BUTTON2] && buttStates[BUTTON3]) {
+		if (buttStates[BTN_A] && !oldButtStates[BTN_A]) {
+			oldButtStates[BTN_A] = buttStates[BTN_A];
+			if (buttStates[BTN_B] && buttStates[BTN_SHIFT]) {
 				writeSeqToEeprom();
 				EEPROMwriting = true; // ignore all buttons until every button is released
 			}
@@ -616,15 +718,15 @@ void seqCheckButts() {
 				}
 			}
 		}
-		else if (!buttStates[BUTTON1] && oldButtStates[BUTTON1]) {
-			oldButtStates[BUTTON1] = buttStates[BUTTON1];
+		else if (!buttStates[BTN_A] && oldButtStates[BTN_A]) {
+			oldButtStates[BTN_A] = buttStates[BTN_A];
 		}
 
 		// BUTTON 2
 
-		else if (buttStates[BUTTON2] && !oldButtStates[BUTTON2]) { // just pressed
-			oldButtStates[BUTTON2] = buttStates[BUTTON2];
-			if (buttStates[BUTTON3]) {
+		else if (buttStates[BTN_B] && !oldButtStates[BTN_B]) { // just pressed
+			oldButtStates[BTN_B] = buttStates[BTN_B];
+			if (buttStates[BTN_SHIFT]) {
 				// don't do nuttin cos we are preparing for 3 button EEPROM WRITE
 			}
 			else {
@@ -633,24 +735,24 @@ void seqCheckButts() {
 				seqCurrentStep = 0; // reset sequence
 			}
 		}
-		else if (!buttStates[BUTTON2] && oldButtStates[BUTTON2]) { // write button released!!!
+		else if (!buttStates[BTN_B] && oldButtStates[BTN_B]) { // write button released!!!
 			seqCurrentStep = seqLength - 1;
 			writeMode = false;
 			HandleNoteOff(noteToWrite, 127);
-			oldButtStates[BUTTON2] = buttStates[BUTTON2];
+			oldButtStates[BTN_B] = buttStates[BTN_B];
 		}
 
 		// BUTTON 3
 
-		else if (buttStates[BUTTON3] && !oldButtStates[BUTTON3]) {
-			oldButtStates[BUTTON3] = buttStates[BUTTON3];
+		else if (buttStates[BTN_SHIFT] && !oldButtStates[BTN_SHIFT]) {
+			oldButtStates[BTN_SHIFT] = buttStates[BTN_SHIFT];
 			if (writeMode) {
 				noteToWrite = 0;
 				writeToSeq(); // write a pause
 			}
 		}
-		else if (!buttStates[BUTTON3] && oldButtStates[BUTTON3]) {
-			oldButtStates[BUTTON3] = buttStates[BUTTON3];
+		else if (!buttStates[BTN_SHIFT] && oldButtStates[BTN_SHIFT]) {
+			oldButtStates[BTN_SHIFT] = buttStates[BTN_SHIFT];
 		}
 	}
 }
@@ -672,7 +774,7 @@ const int8_t* waveTable(byte w) {
 }
 
 void setWaveForm(byte waveNumber) {
-	if (buttStates[BUTTON3]) {
+	if (buttStates[BTN_SHIFT]) {
 		modWave = waveNumber; // remember for the OLED
 		for (int i = 0; i < NUM_VOICES; i++) voices[i].mod.setTable(waveTable(waveNumber));
 	}
@@ -683,7 +785,7 @@ void setWaveForm(byte waveNumber) {
 }
 
 ///////////////////////
-// PRESETS (SET page: BUTTON1 saves, BUTTON2 loads)
+// PRESETS (SET page: A saves, B loads)
 ///////////////////////
 
 void savePreset(byte slot) {
@@ -692,10 +794,10 @@ void savePreset(byte slot) {
 	p.carWave = carWave;         p.modWave = modWave;
 	p.lpfCutoff = lpfCutoff;     p.lpfRes = lpfRes;
 	p.mod_ratio = (byte)mod_ratio;
-	p.lfoDest = lfoDest;         p.lfoWaveSelect = LFOWaveSelect;
-	p.bit7 = bit7Mode;           p.envFilterAmt = envFilterAmt;
+	p.lfoDest = lfoDest;         p.lfoWaveSelect = lfoMode; // field reused as lfoMode
+	p.bit7 = bit7Mode;
 	p.env2FM = env2FM;           p.env2Filt = env2Filt;
-	p.env2Ratio = env2Ratio;     p.env2Mix = env2Mix;
+	p.env2Ratio = env2Ratio;
 	p.polyFilt = polyFilter;
 	p.fmIntensity = fm_intensity;
 	p.attack = dispAttack;       p.decay = dispDecay;
@@ -704,7 +806,7 @@ void savePreset(byte slot) {
 	p.e2Sustain = e2Sustain;     p.e2Release = e2Release;
 	p.lfoRate = lfoRate;         p.modDepth = modDepth;
 	p.rvSize = rvSize;           p.rvDamp = rvDamp;
-	p.rvMix = rvMix;
+	p.rvMix = rvMix;             p.rvSpread = rvSpread;
 	p.oscVol = oscVol;           p.limThresh = limThresh;
 	EEPROM.put(EE_PRESET_ADDR + slot * EE_PRESET_STRIDE, p);
 	EEPROM.commit(); // flash write: expect a tiny audio hiccup, same as a seq save
@@ -735,7 +837,7 @@ bool loadPreset(byte slot) {
 	lpf.setResonance((uint16_t)lpfRes << 8); // cutoff is applied every tick anyway
 	mod_ratio = p.mod_ratio;
 	lfoDest = p.lfoDest;
-	LFOWaveSelect = p.lfoWaveSelect;
+	lfoMode = p.lfoWaveSelect; // field reused as lfoMode (old presets: 0/1 still valid)
 	lfoRate = p.lfoRate;
 	LFO.setFreq(lfoRate);
 	modDepth = p.modDepth;
@@ -743,10 +845,13 @@ bool loadPreset(byte slot) {
 	rvSize = p.rvSize; reverb.setRoomSize(rvSize);
 	rvDamp = p.rvDamp; reverb.setDamp(rvDamp);
 	rvMix = p.rvMix; // wet/dry gains are re-derived from this every control tick
+	rvSpread = p.rvSpread;
+	// presets saved before rvSpread existed carry garbage/NaN in this slot;
+	// fall back to natural width so they still load cleanly
+	if (!(rvSpread >= 0.0f && rvSpread <= 16.0f)) rvSpread = 1.0f;
 	bit7Mode = p.bit7;
-	envFilterAmt = p.envFilterAmt;
 	env2FM = p.env2FM;       env2Filt = p.env2Filt;
-	env2Ratio = p.env2Ratio; env2Mix = p.env2Mix;
+	env2Ratio = p.env2Ratio;
 	e2Attack = p.e2Attack;   e2Decay = p.e2Decay;
 	e2Sustain = p.e2Sustain; e2Release = p.e2Release;
 	polyFilter = p.polyFilt;
@@ -765,28 +870,24 @@ bool loadPreset(byte slot) {
 	return true;
 }
 
-void envCheckButts() { // ENV page: B1/B2 pick which envelope the knobs edit, B3 = routing view
-	if (buttStates[BUTTON1] && !oldButtStates[BUTTON1]) {
-		envSelect = 0;
-		envRouteView = false;
-		lockKnobs(); // knob positions belong to the previous view
+void envCheckButts() { // ENV page: A toggles ENV1/ENV2, B toggles the mod-routing view
+	if (buttStates[BTN_A] && !oldButtStates[BTN_A]) {
+		envSelect = !envSelect;
+		lockKnobs(); // knob positions belong to the other envelope
 	}
-	else if (buttStates[BUTTON2] && !oldButtStates[BUTTON2]) {
-		envSelect = 1;
-		envRouteView = false;
-		lockKnobs();
-	}
-	else if (buttStates[BUTTON3] && !oldButtStates[BUTTON3]) {
+	if (buttStates[BTN_B] && !oldButtStates[BTN_B]) {
 		envRouteView = !envRouteView;
-		lockKnobs();
+		lockKnobs(); // knobs mean something different in the routing view
 	}
-	oldButtStates[BUTTON1] = buttStates[BUTTON1];
-	oldButtStates[BUTTON2] = buttStates[BUTTON2];
-	oldButtStates[BUTTON3] = buttStates[BUTTON3];
+	oldButtStates[BTN_A] = buttStates[BTN_A];
+	oldButtStates[BTN_B] = buttStates[BTN_B];
+	// keep SHIFT's edge state in sync so a held button carried onto another
+	// page can't fire a false edge there
+	oldButtStates[BTN_SHIFT] = buttStates[BTN_SHIFT];
 }
 
 void setCheckButts() { // SET page buttons: preset save/load through a 10-slot selector
-	if (buttStates[BUTTON1] && !oldButtStates[BUTTON1]) {
+	if (buttStates[BTN_A] && !oldButtStates[BTN_A]) {
 		if (presetSelMode == 1) {      // selector open in save mode: confirm
 			savePreset(presetSelSlot);
 			presetMsg = 1;
@@ -802,7 +903,7 @@ void setCheckButts() { // SET page buttons: preset save/load through a 10-slot s
 			presetSelMode = 1;         // open the save selector
 		}
 	}
-	else if (buttStates[BUTTON2] && !oldButtStates[BUTTON2]) {
+	else if (buttStates[BTN_B] && !oldButtStates[BTN_B]) {
 		if (presetSelMode == 2) {      // selector open in load mode: confirm
 			presetMsg = loadPreset(presetSelSlot) ? 2 : 3;
 			presetMsgUntil = millis() + 1200;
@@ -817,8 +918,8 @@ void setCheckButts() { // SET page buttons: preset save/load through a 10-slot s
 			presetSelMode = 2;         // open the load selector
 		}
 	}
-	oldButtStates[BUTTON1] = buttStates[BUTTON1];
-	oldButtStates[BUTTON2] = buttStates[BUTTON2];
+	oldButtStates[BTN_A] = buttStates[BTN_A];
+	oldButtStates[BTN_B] = buttStates[BTN_B];
 }
 
 ///////////////////////
@@ -829,7 +930,7 @@ void setCheckButts() { // SET page buttons: preset save/load through a 10-slot s
 // reads the globals above — a torn read once in a while just means one frame
 // shows a value a tick late, which doesn't matter at 15fps.
 
-const char* PAGE_NAMES[6]  = { "SYNTH", "LFO", "ENV", "SEQ", "VERB", "SET" };
+const char* PAGE_NAMES[6]  = { "MAIN", "AMPENV", "LFO", "VERB", "H4XX", "SEQ" };
 const char* WAVE_NAMES[4]  = { "SIN", "TRI", "SAW", "SQR" };
 const char* LFO_DESTS[4]   = { "PITCH", "FILTER", "FM", "-" };
 const char* NOTE_NAMES[12] = { "C","C#","D","D#","E","F","F#","G","G#","A","A#","B" };
@@ -856,7 +957,7 @@ void drawUI() {
 	byte page = pageState; // snapshot, core 1 may change it mid-draw
 
 	// the preset slot selector takes over the whole screen while open
-	if (page == 5 && presetSelMode) {
+	if (page == PG_HAXX && presetSelMode) {
 		byte mode = presetSelMode; // snapshot both, core 1 may change them mid-draw
 		byte sel = presetSelSlot;
 		oled.clearDisplay();
@@ -879,32 +980,26 @@ void drawUI() {
 			oled.setTextColor(SSD1306_WHITE);
 		}
 		oled.setCursor(0, 56);
-		oled.print(mode == 1 ? "K1:PICK B1:SAVE PG:X" : "K1:PICK B2:LOAD PG:X");
+		oled.print(mode == 1 ? "K1:PICK A:SAVE PG:X" : "K1:PICK B:LOAD PG:X");
 		drawSpinner();
 		oled.display();
 		return;
 	}
 
-	// one row per knob, top to bottom = knob 1..4
+	// one row per knob, top to bottom = knob 1..4 (empty label = unused knob, skipped)
+	for (byte i = 0; i < 4; i++) { lab[i] = ""; val[i][0] = '\0'; }
 	switch (page) {
-	case 0:
-		lab[0] = "FM";      snprintf(val[0], 16, "%ld", fm_intensity);
+	case PG_MAIN:
+		lab[0] = "FM/RAT";  snprintf(val[0], 16, "%ld/%d", fm_intensity, mod_ratio);
 		lab[1] = "CUT/RES"; snprintf(val[1], 16, "%u/%u", lpfCutoff, lpfRes);
-		lab[2] = "RATIO";   snprintf(val[2], 16, "%d", mod_ratio);
-		lab[3] = "WAVE";    snprintf(val[3], 16, "%s/%s", WAVE_NAMES[carWave & 3], WAVE_NAMES[modWave & 3]);
+		lab[2] = "WAVE";    snprintf(val[2], 16, "%s/%s", WAVE_NAMES[carWave & 3], WAVE_NAMES[modWave & 3]);
+		lab[3] = "VOL/LIM"; snprintf(val[3], 16, "%.2f/%u%%", oscVol, (unsigned)(limThresh * (100.0f / 65536.0f)));
 		break;
-	case 1:
-		lab[0] = "RATE";  snprintf(val[0], 16, "%.2fHz", lfoRate);
-		lab[1] = "DEPTH"; snprintf(val[1], 16, "%.2f", modDepth);
-		lab[2] = "DEST";  snprintf(val[2], 16, "%s", LFO_DESTS[lfoDest & 3]);
-		lab[3] = "WAVE";  snprintf(val[3], 16, "%s", LFOWaveSelect ? "RND" : "SIN");
-		break;
-	case 2:
-		if (envRouteView) { // ENV2 destination amounts
+	case PG_ENV:
+		if (envRouteView) { // ENV2 destination amounts (reverb send removed)
 			lab[0] = "FM";     snprintf(val[0], 16, "%u", env2FM);
 			lab[1] = "FILTER"; snprintf(val[1], 16, "%u", env2Filt);
 			lab[2] = "RATIO";  snprintf(val[2], 16, "%u", env2Ratio);
-			lab[3] = "VERBMIX";snprintf(val[3], 16, "%u", env2Mix);
 		}
 		else if (envSelect) { // ENV2 A/D/S/R
 			lab[0] = "ATTACK";  snprintf(val[0], 16, "%d", e2Attack);
@@ -919,7 +1014,25 @@ void drawUI() {
 			lab[3] = "RELEASE"; snprintf(val[3], 16, "%d", dispRelease);
 		}
 		break;
-	case 3:
+	case PG_LFO:
+		lab[0] = "RATE";  snprintf(val[0], 16, "%.2fHz", lfoRate);
+		lab[1] = "DEPTH"; snprintf(val[1], 16, "%.2f", modDepth);
+		lab[2] = "DEST";  snprintf(val[2], 16, "%s", LFO_DESTS[lfoDest & 3]);
+		lab[3] = "WAVE";  snprintf(val[3], 16, "%s",
+		                          lfoMode == 0 ? "MORPH" : lfoMode == 1 ? "RND"
+		                        : lfoMode == 2 ? "STAT+" : lfoMode == 3 ? "STAT-" : "STAT+-");
+		break;
+	case PG_VERB:
+		lab[0] = "SIZE";   snprintf(val[0], 16, "%.2f", rvSize);
+		lab[1] = "DAMP";   snprintf(val[1], 16, "%.2f", rvDamp);
+		lab[2] = "MIX";    snprintf(val[2], 16, "%.2f", rvMix);
+		lab[3] = "SPREAD"; snprintf(val[3], 16, "%.2f", rvSpread);
+		break;
+	case PG_HAXX:
+		lab[0] = "7BIT";   snprintf(val[0], 16, "%s", bit7Mode ? "ON" : "OFF");
+		lab[3] = "FILTER"; snprintf(val[3], 16, "%s", polyFilter ? "POLY" : "PARA");
+		break;
+	case PG_SEQ:
 		if (internalClockSelect) {
 			lab[0] = "TEMPO"; snprintf(val[0], 16, "%u", seqTempo);
 			lab[1] = "GATE";  snprintf(val[1], 16, "%u", seqNoteLength);
@@ -933,18 +1046,6 @@ void drawUI() {
 		else           snprintf(val[2], 16, "-");
 		lab[3] = "OCT"; snprintf(val[3], 16, "%+d", octTranspose);
 		break;
-	case 4:
-		lab[0] = "SIZE";   snprintf(val[0], 16, "%.2f", rvSize);
-		lab[1] = "DAMP";   snprintf(val[1], 16, "%.2f", rvDamp);
-		lab[2] = "MIX";    snprintf(val[2], 16, "%.2f", rvMix);
-		lab[3] = "FILTER"; snprintf(val[3], 16, "%s", polyFilter ? "POLY" : "PARA");
-		break;
-	case 5:
-		lab[0] = "7BIT";    snprintf(val[0], 16, "%s", bit7Mode ? "ON" : "OFF");
-		lab[1] = "ENV>FLT"; snprintf(val[1], 16, "%u", envFilterAmt);
-		lab[2] = "OSC VOL"; snprintf(val[2], 16, "%.2f", oscVol);
-		lab[3] = "LIM THR"; snprintf(val[3], 16, "%u%%", (unsigned)(limThresh * (100.0f / 65536.0f)));
-		break;
 	}
 
 	oled.clearDisplay();
@@ -952,7 +1053,21 @@ void drawUI() {
 	// header: page name + 6-dot page indicator
 	oled.setTextSize(2);
 	oled.setCursor(0, 0);
-	oled.print(PAGE_NAMES[page]);
+	// the ENV page titles itself by which envelope the knobs are editing:
+	// "ENV" with a small amp/mod tag, or just "MOD" in the routing view
+	if (page == PG_ENV) {
+		if (envRouteView) {
+			oled.print("MOD");
+		}
+		else {
+			oled.print("ENV");
+			oled.setTextSize(1);
+			oled.setCursor(38, 9); // small tag after the big ENV, bottom-aligned
+			oled.print(envSelect ? "mod" : "amp");
+			oled.setTextSize(2);
+		}
+	}
+	else oled.print(PAGE_NAMES[page]);
 	for (byte i = 0; i < 6; i++) {
 		if (i == page) oled.fillRect(74 + i * 9, 4, 6, 6, SSD1306_WHITE);
 		else           oled.drawRect(74 + i * 9, 4, 6, 6, SSD1306_WHITE);
@@ -960,6 +1075,7 @@ void drawUI() {
 
 	oled.setTextSize(1);
 	for (byte i = 0; i < 4; i++) {
+		if (lab[i][0] == '\0') continue; // knob unused on this page, leave its row blank
 		int y = 16 + i * 10;
 		oled.setCursor(0, y);
 		oled.print(lab[i]);
@@ -969,7 +1085,7 @@ void drawUI() {
 	}
 
 	// footer on the SEQ page: clock source, write/play state, position
-	if (page == 3) {
+	if (page == PG_SEQ) {
 		char foot[24];
 		snprintf(foot, 24, "%s %s %u/%u",
 		         internalClockSelect ? "INT" : (midiClockRunning ? "EXT>" : "EXT"),
@@ -980,25 +1096,53 @@ void drawUI() {
 	}
 
 	// footer on the ENV page: which envelope / mode the knobs are editing
-	if (page == 2) {
+	if (page == PG_ENV) {
 		oled.setCursor(0, 56);
-		oled.print(envRouteView ? "ENV2 ROUTING  B3:X"
-		                        : (envSelect ? "ENV2  B1:E1 B3:ROUTE"
-		                                     : "ENV1  B2:E2 B3:ROUTE"));
+		oled.print(envRouteView ? "MOD ROUTE   B:BACK"
+		                        : "A:E1/E2  B:MOD");
 	}
 
-	// footer on the SET page: preset button hint / save-load confirmation
-	if (page == 5) {
+	// footer on the LFO page: A cycles the wave; knob 4's job depends on the mode
+	if (page == PG_LFO) {
+		oled.setCursor(0, 56);
+		oled.print(lfoMode == 0 ? "A:WAVE  K4:MORPH" : "A:WAVE  K4:SLEW");
+	}
+
+	// footer on the H4XX page: preset button hint / save-load confirmation
+	if (page == PG_HAXX) {
 		oled.setCursor(0, 56);
 		if (millis() < presetMsgUntil) {
-			oled.print(presetMsg == 1 ? "SAVED" : (presetMsg == 2 ? "LOADED" : "NO PRESET"));
+			oled.print(presetMsg == 1 ? "SAVED"
+			         : presetMsg == 2 ? "LOADED"
+			         : presetMsg == 4 ? "SYSEX RX"
+			                          : "NO PRESET");
 		}
 		else {
-			oled.print("B1:SAVE  B2:LOAD");
+			oled.print("A:SAVE  B:LOAD");
 		}
 	}
 
 	drawSpinner();
+	oled.display();
+}
+
+// boot splash: the gateXtal wordmark with a little play-triangle glyph
+void drawSplash() {
+	oled.clearDisplay();
+	oled.setTextSize(2);
+	oled.setTextColor(SSD1306_WHITE);
+	oled.setCursor(6, 26);
+	oled.print(F("gateXtal"));
+	oled.drawLine(122, 33, 104, 33, SSD1306_WHITE);
+	oled.drawTriangle(104, 40, 113, 24, 121, 40, SSD1306_WHITE);
+	oled.setTextSize(1);
+  	oled.setTextColor(SSD1306_WHITE);
+  	oled.setCursor(107, 45);
+  	oled.print(F("FM"));
+  	oled.drawLine(107, 52, 107, 56, SSD1306_WHITE);
+  	oled.drawLine(113, 51, 113, 53, SSD1306_WHITE);
+  	oled.drawLine(117, 52, 117, 57, SSD1306_WHITE);
+  	oled.drawLine(115, 50, 115, 51, SSD1306_WHITE);
 	oled.display();
 }
 
@@ -1010,6 +1154,8 @@ void displayTask(void*) {
 	}
 	oled.setTextColor(SSD1306_WHITE);
 	oled.setTextWrap(false);
+	drawSplash();
+	vTaskDelay(pdMS_TO_TICKS(1500)); // hold the splash before the UI takes over
 	for (;;) {
 		drawUI();
 		vTaskDelay(pdMS_TO_TICKS(66)); // ~15 fps
@@ -1049,8 +1195,17 @@ void setup() {
 	pinMode(PIN_ARCADE, INPUT_PULLUP);
 
 	// USB: enumerate as a MIDI device (plus a CDC serial port for debugging
-	// and upload auto-reset). Name must be set before USB.begin().
+	// and upload auto-reset). VID/PID/name must be set before USB.begin().
+	USB.VID(0x1209);  // pid.codes open-source hardware VID
+	USB.PID(0x2020);  // our allocated PID
+	USB.manufacturerName("Captain Credible");
 	USB.productName("GateXtal");
+	// unique per-unit serial from the chip's eFuse MAC, so the OS can tell two
+	// GateXtals apart (setters copy the string, so a local buffer is fine)
+	char serial[13];
+	uint64_t mac = ESP.getEfuseMac();
+	snprintf(serial, sizeof(serial), "%04X%08X", (uint16_t)(mac >> 32), (uint32_t)mac);
+	USB.serialNumber(serial);
 	usbMIDI.begin();
 	SerialCDC.begin();
 	USB.begin();
@@ -1080,6 +1235,10 @@ void setup() {
 	lpf.setCutoffFreq(100 << 8);
 	LFO.setFreq(1.f);
 
+	// boot into preset slot 1 (index 0) if it holds a patch; no-op if empty.
+	// after all the default object setup above, so it overrides those defaults.
+	loadPreset(0);
+
 	// OLED on core 0 — all I2C traffic stays off the audio core.
 	// 8k stack: snprintf("%f") through newlib can chew a surprising amount.
 	xTaskCreatePinnedToCore(displayTask, "oled", 8192, NULL, 1, NULL, 0);
@@ -1093,15 +1252,16 @@ void setup() {
 
 void updateControl() {
 
-	// heartbeat: dim blue breathing when idle, so we can tell the control
-	// loop on core 1 is alive (note-on green still overrides it)
+	// heartbeat: dim white breathing when idle, so we can tell the control
+	// loop on core 1 is alive (the per-note color overrides it while held)
 #ifdef RGB_BUILTIN
 	static uint16_t hbCounter = 0;
 	hbCounter++;                              // 512-tick cycle = 2s at 256Hz
 	if (!noteIsOn && (hbCounter & 7) == 0) {  // refresh every 8th tick (32Hz)
 		byte phase = (hbCounter >> 3) & 63;                // 0..63
 		byte tri = (phase < 32) ? phase : (63 - phase);    // triangle 0..31..0
-		rgbLedWrite(RGB_BUILTIN, 0, 0, tri >> 2);          // max ~7/255, subtle
+		byte w = tri >> 2;                                 // max ~7/255, subtle
+		rgbLedWrite(RGB_BUILTIN, w, w, w);                 // white breathe
 	}
 #endif
 
@@ -1164,19 +1324,19 @@ void updateControl() {
 	ArcadeState = !digitalRead(PIN_ARCADE);
 
 	// HANDLE PAGE BUTTON (single button now, cycles through all 6 pages)
-	if (buttStates[PAGEBUTTON] && !oldButtStates[PAGEBUTTON]) {
+	if (buttStates[BTN_PAGE] && !oldButtStates[BTN_PAGE]) {
 		if (presetSelMode) {
 			presetSelMode = 0; // escape hatch: close the preset selector, stay on SET
 			lockKnobs();
 		}
 		else {
 			lockKnobs();
-			pageState = (pageState + 1) % 6;
+			pageState = (pageState + 1) % PG_COUNT;
 		}
-		oldButtStates[PAGEBUTTON] = buttStates[PAGEBUTTON];
+		oldButtStates[BTN_PAGE] = buttStates[BTN_PAGE];
 	}
-	else if (!buttStates[PAGEBUTTON] && oldButtStates[PAGEBUTTON]) {
-		oldButtStates[PAGEBUTTON] = buttStates[PAGEBUTTON];
+	else if (!buttStates[BTN_PAGE] && oldButtStates[BTN_PAGE]) {
+		oldButtStates[BTN_PAGE] = buttStates[BTN_PAGE];
 	}
 
 	//////////////////////////////
@@ -1185,7 +1345,7 @@ void updateControl() {
 
 	if (ArcadeState && !oldArcadeState) { // if Arcadebutton is Pressed
 
-		if (pageState == 3 && buttStates[BUTTON2]) {
+		if (pageState == PG_SEQ && buttStates[BTN_B]) {
 			writeToSeq();
 		}
 		else if (!internalClockSelect && !midiClockRunning) {
@@ -1215,17 +1375,11 @@ void updateControl() {
 		int val = mozziRaw[FMknob];
 
 		switch (pageState) {
-		case 0:
-			fm_intensity = (float(val));
+		case PG_MAIN:
+			if (buttStates[BTN_SHIFT]) mod_ratio = (val >> 6); // SHIFT: RATIO
+			else                       fm_intensity = (float(val));
 			break;
-		case 1:
-			rndFreq = (val * -1 + 1024) << 5; // invert and scale down
-
-			freeq = val;
-			lfoRate = freeq / 50;
-			LFO.setFreq(lfoRate); // CONTROL LFO RATE
-			break;
-		case 2:
+		case PG_ENV:
 			if (envRouteView) {
 				env2FM = val >> 2; // ENV2 -> FM routing amount
 			}
@@ -1238,7 +1392,21 @@ void updateControl() {
 				for (int vi = 0; vi < NUM_VOICES; vi++) voices[vi].env.setAttackTime(dispAttack);
 			}
 			break;
-		case 3:
+		case PG_LFO:
+			rndFreq = (val * -1 + 1024) << 5; // invert and scale down
+
+			freeq = val;
+			lfoRate = freeq / 50;
+			LFO.setFreq(lfoRate); // CONTROL LFO RATE
+			break;
+		case PG_VERB:
+			rvSize = val / 1023.0f;
+			reverb.setRoomSize(rvSize);
+			break;
+		case PG_HAXX:
+			bit7Mode = (val >= 512); // knob as a switch: right half = crunch
+			break;
+		case PG_SEQ:
 			if (internalClockSelect) {
 				seqTempo = (val >> 3) + 3;        // SCALE DOWN
 				seqTempo = (seqTempo * -1) + 130; // INVERT
@@ -1256,13 +1424,6 @@ void updateControl() {
 				}
 			}
 			break;
-		case 4:
-			rvSize = val / 1023.0f;
-			reverb.setRoomSize(rvSize);
-			break;
-		case 5:
-			bit7Mode = (val >= 512); // knob as a switch: right half = crunch
-			break;
 		}
 
 		oldMozziRaw[FMknob] = mozziRaw[FMknob];
@@ -1276,23 +1437,17 @@ void updateControl() {
 		int val = mozziRaw[h4xxKnob];
 
 		switch (pageState) {
-		case 0:
-			lpfCutoff = val >> 2;
-			if (buttStates[BUTTON1]) {
+		case PG_MAIN:
+			if (buttStates[BTN_SHIFT]) { // SHIFT: RES
 				lpfRes = val >> 2;
 				lpf.setResonance((uint16_t)lpfRes << 8);
 				for (int vi = 0; vi < NUM_VOICES; vi++) voices[vi].lpf.setResonance((uint16_t)lpfRes << 8);
 			}
-			// the cutoff itself is applied every tick by the filter block below,
-			// which also folds in the LFO and env->filter modulation
+			else {                       // CUT (applied every tick by the filter block below,
+				lpfCutoff = val >> 2;    // which also folds in the LFO modulation)
+			}
 			break;
-		case 1:
-			// CONTROL LFO DEPTH BIPOLAR M8
-			freeq = val;
-			modDepth = freeq / 1000;
-			offsetOn = modDepth;
-			break;
-		case 2:
+		case PG_ENV:
 			if (envRouteView) {
 				env2Filt = val >> 2; // ENV2 -> filter routing amount
 			}
@@ -1305,16 +1460,20 @@ void updateControl() {
 				for (int vi = 0; vi < NUM_VOICES; vi++) voices[vi].env.setDecayTime(val);
 			}
 			break;
-		case 3:
-			seqNoteLength = map(val, 0, 1024, 0, seqTempo);
-			midiSeqNoteLength = val >> 5; // scale val 0-32
+		case PG_LFO:
+			// CONTROL LFO DEPTH BIPOLAR M8
+			freeq = val;
+			modDepth = freeq / 1000;
+			offsetOn = modDepth;
 			break;
-		case 4:
+		case PG_VERB:
 			rvDamp = val / 1023.0f;
 			reverb.setDamp(rvDamp);
 			break;
-		case 5:
-			envFilterAmt = val >> 2; // ENV -> FILTER amount, 0-255
+		// PG_HAXX knob 2 is now unused (OSC VOL moved to MAIN knob 4)
+		case PG_SEQ:
+			seqNoteLength = map(val, 0, 1024, 0, seqTempo);
+			midiSeqNoteLength = val >> 5; // scale val 0-32
 			break;
 		}
 		oldMozziRaw[h4xxKnob] = mozziRaw[h4xxKnob];
@@ -1327,24 +1486,13 @@ void updateControl() {
 		int val = mozziRaw[attackKnob];
 
 		switch (pageState) { // knob does different things depending on pagestate
-		case 0:
-			if (buttStates[BUTTON2]) {
-				if (val >> 7 != octTranspose) {
-					octTranspose = val >> 7;
-					octTranspose = octTranspose - 4;
-					applyOctTranspose(); // slide held voices without retrigging their ADSRs
-				}
-			}
-			else {
-				mod_ratio = (val >> 6);
-			}
+		case PG_MAIN: {
+			byte w = val >> 8; // 0..3 waveform index
+			byte cur = buttStates[BTN_SHIFT] ? modWave : carWave;
+			if (w != cur) setWaveForm(w); // SHIFT: modulator wave, else carrier
 			break;
-
-		case 1:
-			// CONTROL LFO DEST
-			lfoDest = val >> 8; // 4 different destinations
-			break;
-		case 2:
+		}
+		case PG_ENV:
 			if (envRouteView) {
 				env2Ratio = val >> 2; // ENV2 -> ratio routing amount
 			}
@@ -1363,18 +1511,19 @@ void updateControl() {
 				}
 			}
 			break;
-		case 3:
-			if (buttStates[BUTTON2]) {
+		case PG_LFO:
+			// CONTROL LFO DEST
+			lfoDest = val >> 8; // 4 different destinations
+			break;
+		case PG_VERB:
+			rvMix = val / 1023.0f; // single wet/dry crossfade (applied every tick in the CV block)
+			break;
+		// PG_HAXX knob 3 is now unused (LIM THR moved to MAIN knob 4)
+		case PG_SEQ:
+			if (buttStates[BTN_B]) {
 				setWriteNote(val >> 6);
 			}
 			break;
-		case 4:
-			rvMix = val / 1023.0f; // single wet/dry crossfade (applied every tick in the CV block)
-			break;
-		case 5:
-			oscVol = val / 512.0f; // 0..2: unity at 12 o'clock, above = drive
-			break;
-
 		default:
 			break;
 		}
@@ -1387,43 +1536,42 @@ void updateControl() {
 	if (presetSelMode == 0 && mozziRaw[releaseKnob] != oldMozziRaw[releaseKnob] && !knobLock[releaseKnob]) {
 		int val = mozziRaw[releaseKnob];
 		switch (pageState) { // knob does different things depending on pagestate
-
-		case 0:
-			if (val >> 8 != waveformselect) {
-				waveformselect = val >> 8; // 0 - 1024 to 0 - 4
-				setWaveForm(waveformselect);
+		case PG_MAIN:
+			if (buttStates[BTN_SHIFT]) limThresh = 6554.0f + val * 57.7f; // SHIFT: LIM (~10..100%)
+			else                       oscVol = val / 512.0f;             // VOL 0..2, unity at noon
+			break;
+		case PG_ENV:
+			if (!envRouteView) { // routing view has no knob-4 destination anymore
+				if (envSelect) {
+					e2Release = val;
+					for (int vi = 0; vi < NUM_VOICES; vi++) voices[vi].env2.setReleaseTime(val);
+				}
+				else {
+					dispRelease = val;
+					for (int vi = 0; vi < NUM_VOICES; vi++) voices[vi].env.setReleaseTime(val);
+				}
 			}
 			break;
-
-		case 1:
-			if (val < 512) {
-				LFOWaveSelect = 0;
-			}
-			else {
-				LFOWaveSelect = 1;
-			}
+		// PG_LFO knob 4 is read live in the CV block below: it morphs the wave
+		// in MORPH mode and sets the slew in RND / STAT mode. A picks the mode.
+		case PG_VERB: {
+			// quadratic: fine control down low (mono..natural sits in the first
+			// third of travel), then it blows out to silly-wide at the top
+			float s = val / 1023.0f;
+			rvSpread = s * s * 8.0f; // 0 (mono) .. ~1 natural (~1/3 up) .. 8 (absurd)
 			break;
-		case 2:
-			if (envRouteView) {
-				env2Mix = val >> 2; // ENV2 -> reverb mix routing amount
-			}
-			else if (envSelect) {
-				e2Release = val;
-				for (int vi = 0; vi < NUM_VOICES; vi++) voices[vi].env2.setReleaseTime(val);
-			}
-			else {
-				dispRelease = val;
-				for (int vi = 0; vi < NUM_VOICES; vi++) voices[vi].env.setReleaseTime(val);
-			}
+		}
+		case PG_HAXX:
+			polyFilter = (val >= 512); // left = PARA (one filter), right = POLY (filter per voice)
 			break;
-		case 3:
+		case PG_SEQ:
 			if (val >> 7 != writeOctSelect) {
-				if (buttStates[BUTTON2] && writeMode) {
+				if (buttStates[BTN_B] && writeMode) {
 					writeOctSelect = val >> 7; // 0-8
 					refreshWriteNotePing = true;
 					setWriteNote(noteSelect);
 				}
-				else if (buttStates[BUTTON2]) {
+				else if (buttStates[BTN_B]) {
 				}
 				else { // if knob is twiddled and no butts are true
 					octTranspose = val >> 7; // 0-8
@@ -1433,27 +1581,28 @@ void updateControl() {
 				}
 			}
 			break;
-		case 4:
-			polyFilter = (val >= 512); // left = PARA (one filter), right = POLY (filter per voice)
-			break;
-		case 5:
-			limThresh = 6554.0f + val * 57.7f; // ~10%..100% of the ±65536 output range
-			break;
-
 		default:
 			break;
 		}
 		oldMozziRaw[releaseKnob] = mozziRaw[releaseKnob];
 	}
 
-	// handle seqbutts if in seqmode:
-	if (pageState == 2) { // ENV page: B1/B2 pick envelope, B3 = routing view
+	// page-specific button handling
+	if (pageState == PG_ENV) { // ENV page: A = ENV1/ENV2, B = routing view
 		envCheckButts();
 	}
-	else if (pageState == 3) {
+	else if (pageState == PG_LFO) { // LFO page: A cycles the wave
+		if (buttStates[BTN_A] && !oldButtStates[BTN_A]) {
+			lfoMode = (lfoMode + 1) % 5; // MORPH, RND, STAT+, STAT-, STAT+-
+		}
+		oldButtStates[BTN_A] = buttStates[BTN_A];
+		oldButtStates[BTN_B] = buttStates[BTN_B];
+		oldButtStates[BTN_SHIFT] = buttStates[BTN_SHIFT];
+	}
+	else if (pageState == PG_SEQ) {
 		seqCheckButts();
 	}
-	else if (pageState == 5) { // SET page: preset save/load buttons + slot selector
+	else if (pageState == PG_HAXX) { // H4XX page: preset save/load buttons + slot selector
 		if (presetSelMode) {
 			presetSelSlot = constrain(mozziRaw[FMknob] / 103, 0, NUM_PRESETS - 1); // knob 1 scrolls
 		}
@@ -1474,43 +1623,71 @@ void updateControl() {
 	// HANDLE INTERNAL "CV"
 
 	if (offsetOn) {
-		if (LFOWaveSelect == 0) {
-			lfoOutput = LFO.next();
+		if (lfoMode == 0) {
+			// MORPH: knob 4 morphs the shape — sine (far left) to falling saw
+			// (far right). The saw is read straight off the LFO's own phase so
+			// it stays locked to the sine.
+			int8_t sn = LFO.next();
+			int cell = (int)((LFO.getPhaseFractional() >> OSCIL_F_BITS) & (SIN512_NUM_CELLS - 1));
+			int fall = 127 - (cell >> 1);             // 0..511 -> 127..-128 falling saw
+			int k = mozziRaw[releaseKnob];            // knob 4: 0(sine)..1023(saw)
+			int out = ((1023 - k) * (int)sn + k * fall) / 1023;
+			lfoOutput = constrain(out, -128, 127);
 		}
-		else {
-			// RANDOM
-
+		else if (lfoMode == 1) {
+			// RND: slewed random. Rate (knob 1) sets step rate, knob 4 sets slew.
 			if (mozziMicros() - rndTimer > (unsigned long)(rndFreq << 3)) {
 				int lfoOutputBUFFER = rand(0, 244); // if depth adjusts this we can skip a float calc later
 				HDlfoOutputBuffer = Q16n0_to_Q16n16(lfoOutputBUFFER);
 				rndTimer = mozziMicros();
 			}
-			Q16n16 slew = (((mozziRaw[3] >> 2) * -1) + 256) * 2; // x2: slew steps are control ticks, now 256Hz
+			// knob 4 = slew. Quadratic so the snappy end gets most of the travel
+			// (linear wasted ~3/4 of the knob in the "fully smoothed" zone).
+			int inv = 1023 - mozziRaw[releaseKnob];   // 0 (snappy) .. 1023 (heavy)
+			Q16n16 slew = 2 + ((inv * inv) >> 12);    // ~2..257 slew steps at 256Hz
 			aInterpolate.set(HDlfoOutputBuffer, slew);
 			Q16n16 interpolatedLfoOutputBUFFER = aInterpolate.next();
 			lfoOutput = Q16n16_to_Q16n0(interpolatedLfoOutputBUFFER) - 128; // scaled back down and offset to -128..128
 		}
-
-		if (lfoDest == 2) {
-			fm_intensity = (float((lfoOutput + 128) * modDepth));
+		else {
+			// STAT: silence with random pops/crackle. Rate (knob 1, held in freeq)
+			// sets pop density; knob 4 sets how fast each pop decays back to centre.
+			// lfoMode 2 = STAT+ (up only), 3 = STAT- (down only), 4 = STAT+- (both).
+			if ((int)rand(0, 1024) < ((int)freeq >> 1)) {
+				if (lfoMode == 2)      statVal = rand(128, 256); // pop up:   out 0..127
+				else if (lfoMode == 3) statVal = rand(0, 129);   // pop down: out -128..0
+				else                   statVal = rand(0, 256);   // bipolar
+			}
+			else {                                     // otherwise decay toward centre (silence)
+				int step = (mozziRaw[releaseKnob] >> 5) + 1; // knob 4: 1(slow tails)..32(snappy)
+				if (statVal > 128) statVal = statVal - step < 128 ? 128 : statVal - step;
+				else if (statVal < 128) statVal = statVal + step > 128 ? 128 : statVal + step;
+			}
+			lfoOutput = statVal - 128; // -128..127, 0 when idle
 		}
+
 	}
 
 	// reverb base mix from the rvMix crossfade: dry full up to centre, then hands
-	// over to wet. ENV2's VERBMIX routing rides on top as per-voice sends.
+	// over to wet (VERB page MIX knob).
 	if (rvMix <= 0.5f) { wetBase = rvMix * 2.0f; dryNow = 1.0f; }
 	else               { wetBase = 1.0f;         dryNow = (1.0f - rvMix) * 2.0f; }
 
-	// base filter cutoff shared by both filter modes: knob + LFO (dest 1) + the
-	// amp-env follow amount (SET page). ENV2->filter is added per voice below.
+	// base filter cutoff shared by both filter modes: knob + LFO (dest 1).
+	// ENV2->filter is added per voice below.
 	int cutBase = lpfCutoff;
 	if (offsetOn && lfoDest == 1) {
-		cutBase += (int)(lfoOutput + 126 * modDepth); // same maths the old LFO-only path used
+		cutBase += (int)(lfoOutput * modDepth); // scale the LFO swing by depth (bipolar)
 	}
-	if (envFilterAmt) {
-		cutBase += (envPeak * envFilterAmt) >> 8; // loudest voice env, captured in updateAudio()
+	const int cutFloor = 4; // keep the filter just above fully-closed (no dead silence)
+
+	// base FM shared by every voice: knob + LFO (dest 2). ENV2->FM is added per
+	// voice below. The LFO sums on top of the FM knob rather than replacing it.
+	long fmBase = fm_intensity;
+	if (offsetOn && lfoDest == 2) {
+		fmBase += (long)(lfoOutput * modDepth); // bipolar swing around the knob
+		if (fmBase < 0) fmBase = 0;             // FM amount can't go negative
 	}
-	envPeak = 0; // fresh peak capture for the next tick
 
 	// per voice: both envelopes, ENV2 routing fan-out, shared-LFO vibrato, ratio tracking
 	int e2Max = 0;
@@ -1520,11 +1697,10 @@ void updateControl() {
 		v.env2.update();
 		int e2v = v.env2.next(); // this voice's ENV2, 0..255
 		if (e2v > e2Max) e2Max = e2v;
-		v.fmNow = fm_intensity + (((long)env2FM * e2v) >> 6);  // ENV2 -> FM, per voice
-		v.sendI = ((int)env2Mix * e2v) >> 8;                   // ENV2 -> reverb send, per voice
+		v.fmNow = fmBase + (((long)env2FM * e2v) >> 6);  // ENV2 -> FM, per voice
 		if (!v.active && !v.env.playing()) continue; // idle voice, skip the tuning maths
 		if (polyFilter) { // POLY: this voice's own filter gets base + its own ENV2 push
-			int c = constrain(cutBase + (((int)env2Filt * e2v) >> 8), 0, 254);
+			int c = constrain(cutBase + (((int)env2Filt * e2v) >> 8), cutFloor, 254);
 			v.lpf.setCutoffFreq((uint16_t)c << 8);
 		}
 		int ratioNow = mod_ratio + (int)(((long)env2Ratio * e2v) >> 13); // ENV2 -> ratio, per voice
@@ -1544,7 +1720,7 @@ void updateControl() {
 		v.mod.setFreq(mf);
 	}
 	if (!polyFilter) { // PARA: one filter on the sum; ENV2->filter follows the loudest ENV2
-		int c = constrain(cutBase + (((int)env2Filt * e2Max) >> 8), 0, 254);
+		int c = constrain(cutBase + (((int)env2Filt * e2Max) >> 8), cutFloor, 254);
 		lpf.setCutoffFreq((uint16_t)c << 8);
 	}
 	handleSequencer();
@@ -1554,45 +1730,56 @@ void updateControl() {
 // AUDIO
 ///////////////////////
 
+// tanh-shaped saturator (Pade approximation): no corner anywhere, just a
+// progressively harder harmonic bend. Nearly linear below half scale, the rail
+// lands at x=1.33 (~0.87 out), and it only fully flattens at 3x over. Returns
+// roughly -1..1; the caller scales it back up to the output range.
+static inline float softClip(float m) {
+	float x = m * (1.0f / 49152.0f);
+	if (x > 3.0f) x = 3.0f; else if (x < -3.0f) x = -3.0f;
+	float xx = x * x;
+	return x * (27.0f + xx) / (27.0f + 9.0f * xx); // == tanh to within 1%, exactly ±1 at ±3
+}
+
 AudioOutput updateAudio() {
 	int32_t mix = 0;
-	int32_t sendAcc = 0; // per-voice reverb sends (ENV2 VERBMIX routing)
 	for (int vi = 0; vi < NUM_VOICES; vi++) {
 		Voice& v = voices[vi];
 		if (!v.active && !v.env.playing()) continue; // silent voice, save the cycles
 		long modulation = v.fmNow * v.mod.next();    // per-voice FM depth (ENV2 routing)
 		int e = v.env.next();
-		if (e > envPeak) envPeak = e; // control tick reads this for env->filter
 		int s = e * v.car.phMod(modulation); // ±32385 per voice, ~15 bits
 		if (polyFilter) s = v.lpf.next(s);   // POLY: filter each voice before the sum
 		mix += s;
-		if (v.sendI) sendAcc += (s * v.sendI) >> 8; // this voice's feed into the reverb
 	}
-	mix = (int32_t)(mix * oscVol); // SET page OSC VOL: >1.0 drives the output stage
+	mix = (int32_t)(mix * oscVol); // H4XX page OSC VOL: >1.0 drives the output stage
 
 	int filtered = polyFilter ? mix : lpf.next(mix); // PARA: one filter on the sum, as ever
 	if (bit7Mode) {
 		filtered = (filtered >> 9) << 9; // crush to 128 levels — the old AVR resolution, reverb tail included
 	}
-	// reverb input = base mix feed + the ENV2 per-voice sends (wet_ inside is fixed at 1)
-	float wet = reverb.process((float)filtered * wetBase + (float)sendAcc * oscVol);
-	float m = (float)filtered * dryNow + wet;
+	// reverb input scaled by the wet/dry crossfade base (wet_ inside is fixed at 1).
+	// dry stays mono/centred; the stereo width lives entirely in the wet tail.
+	float wetL, wetR;
+	reverb.processStereo((float)filtered * wetBase, wetL, wetR);
+	// SPREAD: mid/side width on the wet tail. rvSpread 0 = mono (both = mid),
+	// 1 = the reverb's natural stereo, >1 = exaggerated. Dry stays centred.
+	float mid = (wetL + wetR) * 0.5f;
+	float side = (wetL - wetR) * 0.5f * rvSpread;
+	float dry = (float)filtered * dryNow;
+	float mL = dry + mid + side;
+	float mR = dry + mid - side;
 
 	// peak limiter: instant attack, ~100ms release. Ducks by exactly the
 	// overshoot, so chords come down transparently instead of flat-topping.
-	float level = fabsf(m);
+	// Drive it from the louder channel so the stereo image isn't skewed.
+	float level = fmaxf(fabsf(mL), fabsf(mR));
 	if (level > limEnv) limEnv = level;
 	else                limEnv *= LIM_RELEASE;
-	if (limEnv > limThresh) m *= limThresh / limEnv;
+	if (limEnv > limThresh) { float g = limThresh / limEnv; mL *= g; mR *= g; }
 
-	// tanh-shaped saturator (Pade approximation): no corner anywhere, just a
-	// progressively harder harmonic bend. Nearly linear below half scale, the
-	// rail lands at x=1.33 (~0.87 out), and it only fully flattens at 3x over.
-	float x = m * (1.0f / 49152.0f);
-	if (x > 3.0f) x = 3.0f; else if (x < -3.0f) x = -3.0f;
-	float xx = x * x;
-	float y = x * (27.0f + xx) / (27.0f + 9.0f * xx); // == tanh to within 1%, exactly ±1 at ±3
-	return MonoOutput::fromNBit(17, (int)(y * 65535.0f));
+	return StereoOutput::fromNBit(17, (int)(softClip(mL) * 65535.0f),
+	                                 (int)(softClip(mR) * 65535.0f));
 }
 
 void loop() {
