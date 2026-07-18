@@ -618,6 +618,7 @@ void seqPlayStep(byte step) {
 }
 
 void playNextStep() {
+	if (seqLength == 0) return; // empty sequence (e.g. mid-write): avoid % 0 → div-by-zero crash
 	seqCurrentStep++;
 	seqCurrentStep = seqCurrentStep % seqLength;
 	seqPlayStep(seqCurrentStep);
