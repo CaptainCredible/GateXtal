@@ -7,8 +7,8 @@
     A button ..... 11   (all buttons to GND, internal pullups)
     B button ..... 12
     SHIFT button . 13   (held = alternate knob functions on every page)
-    PAGE button .. 1   (single button, cycles the 6 pages:
-                           MAIN / AMPENV / LFO / VERB / H4XX / SEQ)
+    PAGE button .. 1   (single button, cycles the 7 pages:
+                           MAIN / AMPENV / LFO / VERB / H4XX / SEQ / PERF)
     ARCADE button .. 43   (the "TX" pin — plain GPIO once booted; the boot ROM
                            chatters on it for ~100ms at reset, harmless for a
                            button. A 470R-1k series resistor is cheap insurance
@@ -101,6 +101,7 @@
 #include <tables/sin512_int8.h>               // lofi sine for LFO
 
 #include "Freeverb.h" // needs MOZZI_AUDIO_RATE, so must come after Mozzi.h
+#include "CCLOGO_bitmap.h" // Captain Credible logo, shown before the gateXtal splash
 
 // ------- PINS -------
 #define PIN_ARCADE  43
@@ -124,11 +125,9 @@ int KNOBS[4] = { 2, 3, 4, 5 };
 #define releaseKnob 3
 
 // ------- EEPROM layout (flash-emulated) -------
-#define EEPROM_SIZE   1536 // sequence + 10 preset slots
-#define EE_SEQ_BASE   0    // steps 0..255
-#define EE_ADDR_LEN   256
-#define EE_ADDR_MAGIC 257
-#define EE_MAGIC      123  // flag so we can tell if EEPROM contains a sequence or mumbo jumbo
+#define EEPROM_SIZE   2560 // 10 sound presets + 4 sequencer-setup slots
+// bytes 0..259 held the old single-sequence dump; abandoned by the sequencer
+// revamp but left reserved so the preset slots above keep their addresses
 
 #define EE_PRESET_ADDR   260  // preset slots live above the sequence
 #define EE_PRESET_STRIDE 96   // bytes per slot (struct is ~72, rounded up for future fields)
@@ -154,31 +153,105 @@ struct Preset { // everything that makes the sound; saved/loaded on the SET page
 };
 static_assert(sizeof(Preset) <= EE_PRESET_STRIDE, "Preset struct outgrew its EEPROM slot");
 
-// ------- STATE -------
-int transpose = 0;
-int octTranspose = 0;
+// ------- SEQUENCER STATE -------
+// Two monophonic note sequencers (A/B, both always playing) plus a transpose
+// sequencer stepping semitone offsets over them. Each has two switchable
+// parts; part changes queue until the sequence wraps. One global scale/tempo.
 
-byte midiClockStepSize = 24;
+#define SEQ_MAX_STEPS 32
+#define NUM_NOTE_SEQS 2
+#define NUM_SCALES    5
+#define SEQ_BASE_NOTE 36 // scale degree 1 at octave 0 = C2
+const byte SEQ_DIVS[5] = { 1, 3, 4, 6, 8 }; // per-seq clock divider (SHIFT+K3)
 
-bool midiClockRunning = false;
+// note step encoding, packed in one byte for EEPROM friendliness:
+// low nibble 0 = rest, 1..12 = scale degree, 13 = tie; high nibble = octave 0..4
+#define STEP_REST 0
+#define STEP_TIE  13
+
+// each scale is 12 knob positions worth of semitone offsets from the root
+// (they span 1.5-3 octaves, so degree order = the note lists in the spec)
+const int8_t SCALES[NUM_SCALES][12] = {
+	{ 0, 3, 7, 9,10,12,15,19,21,22,24,27 }, // Minor      C D# G A A# C2 D#2 G2 A2 A#2 C3 D#3
+	{ 0, 4, 7,11,12,16,19,23,24,28,31,35 }, // Major      C E G B C2 E2 G2 B2 C3 E3 G3 B3
+	{ 0, 1, 4, 5, 6, 9,10,12,13,16,17,18 }, // Oriental   C C# E F F# A A# C2 C#2 E2 F2 F#2
+	{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11 }, // Chromatic
+	{ 0, 3, 5, 7,10,12,15,17,19,22,24,27 }, // Pentatonic C D# F G A# C2 D#2 F2 G2 A#2 C3 D#3
+};
+const char* SCALE_NAMES[NUM_SCALES] = { "MINOR", "MAJOR", "ORIENT", "CHROM", "PENTA" };
+
+struct NotePart  { byte steps[SEQ_MAX_STEPS]; byte length; };   // length 4..32
+struct TransPart { int8_t steps[SEQ_MAX_STEPS]; byte length; }; // semitones -12..+12
+
+struct NoteSeq {
+	NotePart part[2];
+	byte curPart = 0, pendingPart = 0; // pendingPart applied when playStep wraps to 0
+	byte gatePct = 60;                 // gate 0..100% of a step (SHIFT+K1), global per sequencer
+	byte divIdx = 0;                   // index into SEQ_DIVS (SHIFT+K3)
+	byte playStep = 0, editStep = 0;   // playhead / knob-4 edit cursor
+	byte divCount = 0;                 // global steps until this seq advances again
+	int8_t soundingVoice = -1;         // voice index sounding our note, -1 = none
+	byte soundingNote = 0;             // the MIDI note that voice is playing (steal guard)
+	unsigned int gateTicks = 0;        // control ticks until gate-off; 0 = idle or held into a tie
+};
+
+struct TransSeq {
+	TransPart part[2];
+	byte curPart = 0, pendingPart = 0;
+	byte divIdx = 0;                   // divides the 1-per-16-global-steps base rate further
+	byte playStep = 0, editStep = 0;
+	byte divCount = 0;                 // global steps until the next transpose step (mod 16*div)
+	int8_t curVal = 0;                 // transpose currently applied to both note seqs
+};
+
+NoteSeq noteSeqs[NUM_NOTE_SEQS];
+TransSeq transSeq;
+byte selSeq = 0;             // editing focus (button A cycles): 0 = A, 1 = B, 2 = transpose
+byte scaleIdx = 0;           // global scale (SHIFT+K2)
+unsigned int bpm = 120;      // global tempo (K3), 40..240; steps are 16ths
+uint32_t clockAcc = 0;       // 8.8 fixed-point control-tick accumulator for the step clock
+bool seqPlaying = false;     // transport: SHIFT+arcade toggles, MIDI start/stop follows.
+                             // boots stopped
+
+bool midiClockRunning = false;    // external MIDI clock overrides the internal one
 unsigned long lastMidiTickMs = 0; // for the clock timeout in handleSequencer()
-bool writeMode = false;
-byte noteToWrite = 0;
-byte octOffset = 0;
-byte sequence[256] = { 40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51,40,44,47,40,44,48,40,44,47,40,44,48,40,44,47,51 };
-unsigned int seqIncrement = 0; // counter to keep track of when next step should come
-byte seqCurrentStep = 0;
-byte midiClockTicks = 0;
-byte midiSeqNoteLength = 23;
-unsigned int seqNoteLength = 120; // in control ticks (256Hz) — was 60 at CONTROL_RATE 128
-byte midiClockDivider = 1;
-bool internalClockSelect = false; // 0 = Arcade only or midi clock, 1 = internal clock
-unsigned int seqTempo = 240; // in control ticks (256Hz) — was 120 at CONTROL_RATE 128
-byte seqLength = 16;
-byte writeOctSelect = 3;
-byte noteSelect = 0;
-byte prevNoteSelect = 0;
-bool refreshWriteNotePing = false;
+byte midiClockTicks = 0;          // 0..5, 24ppqn = 6 ticks per 16th step
+
+NotePart noteClip;  bool noteClipValid = false;  // SHIFT+A/B copy/paste clipboards,
+TransPart transClip; bool transClipValid = false; // one per part type so paste can't mix them
+
+// ------- sequencer-setup slots (SET page, SHIFT+A/B) -------
+#define EE_SEQSET_ADDR   1280 // above the preset slots (260 + 10*96 = 1220)
+#define EE_SEQSET_STRIDE 320
+#define NUM_SEQ_SLOTS    4
+#define SEQSET_MAGIC     0x53 // bumped when the struct layout changes
+
+struct SeqSetup { // the entire sequencer state worth persisting, flat POD
+	byte magic;
+	NotePart noteParts[NUM_NOTE_SEQS][2];
+	byte curPart[NUM_NOTE_SEQS];
+	byte gatePct[NUM_NOTE_SEQS];
+	byte divIdx[NUM_NOTE_SEQS];
+	TransPart transParts[2];
+	byte transCurPart;
+	byte transDivIdx;
+	byte scale;
+	uint16_t tempo;
+};
+static_assert(sizeof(SeqSetup) <= EE_SEQSET_STRIDE, "SeqSetup outgrew its EEPROM slot");
+static_assert(EE_SEQSET_ADDR + NUM_SEQ_SLOTS * EE_SEQSET_STRIDE <= EEPROM_SIZE, "seq slots past EEPROM end");
+bool seqSlotUsed[NUM_SEQ_SLOTS] = { false }; // which slots hold a setup (scanned at boot)
+
+// ------- PERFORM page state -------
+// knobs 3/4 play scale notes live (like the sequencer's step preview) without
+// touching any stored steps; knobs 1/2 mirror MAIN's FM/RATIO and CUT/RES
+byte perfDeg = 0;               // 0 = silent, 1..12 = scale degree being played (K3)
+byte perfOct = 2;               // octave 0..4 (K4)
+byte perfGatePct = 50;          // SHIFT+K3: performed-note length (~50ms..2s)
+bool perfHold = false;          // K3 at max: sustain until the knob moves away
+int8_t perfVoice = -1;          // voice we lit up, -1 = none
+byte perfNote = 0;              // MIDI note that voice is playing (steal guard)
+unsigned int perfGateTicks = 0; // control ticks left before the note gates off
 
 Line <Q16n16> aInterpolate;
 int mozziRaw[4] = { 0,0,0,0 };
@@ -192,7 +265,7 @@ bool noteIsOn = false; // keep track of number of playing notes
 byte pageState = 0;
 // page order (the PAGE button cycles these). Reorder the whole UI by renumbering
 // here — every switch/if below keys off these names, not raw case numbers.
-enum Page { PG_MAIN = 0, PG_ENV, PG_LFO, PG_VERB, PG_HAXX, PG_SEQ, PG_COUNT };
+enum Page { PG_MAIN = 0, PG_ENV, PG_LFO, PG_VERB, PG_HAXX, PG_SEQ, PG_PERF, PG_COUNT };
 int8_t lfoOutput = 0;  // value to store current offset from root
 int mod_ratio = 3;
 long fm_intensity = 0;
@@ -209,7 +282,6 @@ int statVal = 128;     // STAT mode running level, 0..255 (128 = centre/silence)
 unsigned long rndTimer = 0;
 long int rndFreq = 0;
 Q16n16 HDlfoOutputBuffer = 0; // this is a big type for slew manipulation
-byte arcadeNote = 0;
 bool knobLock[4] = { true, true, true, true };
 int lockAnchor[4] = { -99,-99,-99,-99 };
 int lockThresh = 50;
@@ -270,26 +342,39 @@ bool bit7Mode = false; // H4XX page: crush the synth back to the old AVR's ~7-bi
 // Single notes pass untouched, stacked voices get transparently ducked, and
 // whatever is driven past that bends smoothly instead of clipping hard.
 float limEnv = 0;              // peak envelope follower
+float limGain = 1.0f;          // smoothed applied gain (slewn so it never steps audibly)
+uint16_t limHold = 0;          // samples left of peak hold before the release starts
 float limThresh = 44000.0f;    // limit level (SET page knob 4), of the ±65536 output range
 float oscVol = 1.0f;           // pre-filter voice-mix gain (SET page knob 3): >1 = drive
 #define LIM_RELEASE 0.99969f   // per-sample release: falls to 37% in ~100ms at 32768Hz
+#define LIM_HOLD 512           // ~15ms peak hold: stops the envelope rippling (and thus
+                               // distorting) at the note's own frequency between wave peaks
+#define LIM_GAIN_SLEW 0.03f    // ~1ms gain smoothing: no per-sample gain jumps on attack
+                               // (softClip below bends the brief overshoot while it settles)
 
 byte presetMsg = 0;                // 1 = saved, 2 = loaded, 3 = no preset found
 unsigned long presetMsgUntil = 0;  // OLED shows the message until this millis()
-byte presetSelMode = 0;            // 0 = closed, 1 = choosing a save slot, 2 = choosing a load slot
-byte presetSelSlot = 0;            // slot the selector is pointing at (0..NUM_PRESETS-1)
+byte presetSelMode = 0;            // 0 = closed, 1/2 = preset save/load slot picker,
+                                   // 3/4 = sequencer-setup save/load slot picker
+byte presetSelSlot = 0;            // slot the selector is pointing at
 bool presetUsed[NUM_PRESETS] = { false }; // which slots hold a patch (scanned at boot)
 
 // ------- forward declarations (this is a .cpp, no .ino magic prototypes) -------
 void HandleNoteOn(byte note, byte velocity);
 void HandleNoteOff(byte note, byte velocity);
-void playNextStep();
-void writeToSeq();
-void setWriteNote(byte thisNote);
+void seqNoteOn(NoteSeq& s, byte midiNote);
+void seqNoteOff(NoteSeq& s);
+void seqAllNotesOff();
+void perfPlay();
+void perfNoteOff();
+void doGlobalStep();
+void resetAllSeqs();
+void auditionStep(byte i);
 void seqCheckButts();
 void handleSequencer();
-void writeSeqToEeprom();
-void readSeqFromEeprom();
+void saveSeqSetup(byte slot);
+bool loadSeqSetup(byte slot);
+void initSeqDefaults();
 void lockKnobs();
 
 ///////////////////////
@@ -315,12 +400,9 @@ void writeLED(bool state) { // used for note-off (green kept for any non-note us
 #endif
 }
 
-Voice* allocVoice(byte note) {
-	// same note still sounding: retrigger that voice instead of doubling it
-	for (int i = 0; i < NUM_VOICES; i++) {
-		if (voices[i].active && voices[i].note == note) return &voices[i];
-	}
-	// otherwise a completely idle voice (envelope finished)
+Voice* allocVoiceFree() { // pick a voice without note-matching (sequencers use this
+                          // directly so two seqs on the same pitch never share a voice)
+	// a completely idle voice (envelope finished)
 	for (int i = 0; i < NUM_VOICES; i++) {
 		if (!voices[i].active && !voices[i].env.playing()) return &voices[i];
 	}
@@ -338,33 +420,27 @@ Voice* allocVoice(byte note) {
 	return best;
 }
 
+Voice* allocVoice(byte note) {
+	// same note still sounding: retrigger that voice instead of doubling it
+	for (int i = 0; i < NUM_VOICES; i++) {
+		if (voices[i].active && voices[i].note == note) return &voices[i];
+	}
+	return allocVoiceFree();
+}
+
 void HandleNoteOn(byte note, byte velocity) {
 	if (note != 0) { // if not zero
-		int octedNote = constrain(note + (octTranspose * 12), 0, 127);
 		Voice* v = allocVoice(note);
 		v->note = note;
 		v->active = true;
 		v->age = ++voiceAge;
-		v->freq = mtof(float(octedNote));
+		v->freq = mtof(float(note));
 		v->car.setFreq(v->freq);
 		v->env.noteOn();
 		v->env2.noteOn(); // this voice's own mod envelope
 		noteIsOn = true;
 		writeNoteLED(note);
 		lastNote = note;
-	}
-}
-
-// re-pitch every held voice from its own note (replaces the old mono legato():
-// slides to the new octave without retriggering the envelopes; idle voices
-// pick the new transpose up at their next noteOn)
-void applyOctTranspose() {
-	for (int i = 0; i < NUM_VOICES; i++) {
-		if (voices[i].active) {
-			int octedNote = constrain(voices[i].note + (octTranspose * 12), 0, 127);
-			voices[i].freq = mtof(float(octedNote));
-			voices[i].car.setFreq(voices[i].freq);
-		}
 	}
 }
 
@@ -502,52 +578,33 @@ void HandleDINSysEx(byte* data, unsigned length) { // includes the F0/F7 framing
 
 void HandleDINNoteOn(byte channel, byte note, byte velocity) {
 	HandleNoteOn(note, velocity);
-	if (pageState == PG_SEQ && buttStates[BTN_B]) {
-		noteToWrite = note;
-		writeToSeq();
-	}
 }
 
 void HandleDINNoteOff(byte channel, byte note, byte velocity) {
 	HandleNoteOff(note, velocity);
 }
 
-void handleMidiClockTicks() {
-	midiClockRunning = true;
+void handleMidiClockTicks() { // 24ppqn: every 6th tick is one global 16th step
+	midiClockRunning = true;  // external clock present: it owns the step timing now
 	lastMidiTickMs = millis();
-	midiClockTicks++;
-	midiClockTicks = midiClockTicks % midiClockStepSize;
-	if (midiClockTicks == 1) {
-		playNextStep();
-	}
-	else if (midiClockTicks > midiSeqNoteLength && noteIsOn) { // passed note length and a note is on
-		HandleNoteOff(sequence[seqCurrentStep], 0);
-	}
+	if (midiClockTicks == 0 && seqPlaying) doGlobalStep(); // transport still gates playback
+	midiClockTicks = (midiClockTicks + 1) % 6;
 }
 
-void resetSeq() {
-	seqCurrentStep = seqLength - 1;
-	midiClockTicks = 0;
+void externalClockStart() { // MIDI start/continue: play from the top
+	seqPlaying = true;
+	resetAllSeqs();
 }
 
-void handleMIDIClock() {
-	if (!internalClockSelect) {
-		handleMidiClockTicks();
-	}
+void externalClockStop() {
+	midiClockRunning = false;
+	seqPlaying = false;
+	seqAllNotesOff();
 }
 
-void handleMIDIClockStart() {
-	if (!internalClockSelect) {
-		resetSeq();
-	}
-}
-
-void handleMIDIClockStop() {
-	if (!internalClockSelect) {
-		HandleNoteOff(sequence[seqCurrentStep], 0);
-		midiClockRunning = false;
-	}
-}
+void handleMIDIClock()      { handleMidiClockTicks(); }
+void handleMIDIClockStart() { externalClockStart(); }
+void handleMIDIClockStop()  { externalClockStop(); }
 
 void usbmidiprocessing() {
 	midiEventPacket_t e;
@@ -557,20 +614,10 @@ void usbmidiprocessing() {
 		// NOTE ON WITH VELOCITY GREATER THAN ZERO
 		if (cin == 0x09 && e.byte3 > 0) {
 			HandleNoteOn(e.byte2, e.byte3);
-			if (pageState == PG_SEQ && buttStates[BTN_B]) {
-				noteToWrite = e.byte2;
-				writeToSeq();
-			}
 		}
-		// USB NOTE OFF
-		else if (cin == 0x08) {
+		// USB NOTE OFF (real note-off or running-status note-on with velocity 0)
+		else if (cin == 0x08 || (cin == 0x09 && e.byte3 == 0)) {
 			HandleNoteOff(e.byte2, e.byte3);
-		}
-		// NOTE ON W/ ZERO VELOCITY
-		else if (cin == 0x09 && e.byte3 == 0) {
-			if (!internalClockSelect) {
-				HandleNoteOff(e.byte2, e.byte3);
-			}
 		}
 		// sysex stream: CIN 4 = continue (3 bytes), 5/6/7 = end with 1/2/3 bytes
 		else if (cin >= 0x04 && cin <= 0x07) {
@@ -582,20 +629,13 @@ void usbmidiprocessing() {
 		// single-byte system realtime: clock / start / continue / stop
 		else if (cin == 0x0F) {
 			if (e.byte1 == 0xF8) { // clock tick
-				if (!internalClockSelect) {
-					handleMidiClockTicks();
-				}
+				handleMidiClockTicks();
 			}
 			else if (e.byte1 == 0xFA || e.byte1 == 0xFB) { // start / continue
-				if (!internalClockSelect) {
-					resetSeq();
-				}
+				externalClockStart();
 			}
-			else if (e.byte1 == 0xFC) { // stop (252, like the old e.m1 check)
-				if (!internalClockSelect) {
-					HandleNoteOff(sequence[seqCurrentStep], 0);
-					midiClockRunning = false;
-				}
+			else if (e.byte1 == 0xFC) { // stop
+				externalClockStop();
 			}
 		}
 	}
@@ -605,157 +645,339 @@ void usbmidiprocessing() {
 // SEQUENCER
 ///////////////////////
 
-void seqPlayStep(byte step) {
-	if (sequence[step]) { // if the step is not a zero
-		if (noteIsOn && seqLength > 0) {
-			// turn off prev note (was (step-1)%16, which missed for seqLength != 16 —
-			// mono didn't care, but a missed off would leave a poly voice hanging)
-			HandleNoteOff(sequence[(byte)((step + seqLength - 1) % seqLength)], 0);
-		}
-		HandleNoteOn(sequence[step], 127); // turn on next note
-		arcadeNote = sequence[step];
+static inline byte stepDeg(byte st) { return st & 0x0F; }
+static inline byte stepOct(byte st) { return (st >> 4) & 0x07; }
+
+// scale lookup + per-step octave + the transpose sequencer's running offset
+// (scale applied before transposition, as per the spec)
+byte stepMidiNote(byte st) {
+	int n = SEQ_BASE_NOTE + SCALES[scaleIdx][(stepDeg(st) - 1) % 12]
+	      + 12 * stepOct(st) + transSeq.curVal;
+	return (byte)constrain(n, 0, 127);
+}
+
+// sequencer notes bypass HandleNoteOn/Off: two sequencers may sit on the same
+// pitch, and the plain note-off path kills *every* voice holding that note.
+// Each sequencer instead remembers exactly which voice it lit up.
+void seqNoteOn(NoteSeq& s, byte midiNote) {
+	Voice* v = allocVoiceFree();
+	v->note = midiNote;
+	v->active = true;
+	v->age = ++voiceAge;
+	v->freq = mtof(float(midiNote));
+	v->car.setFreq(v->freq);
+	v->env.noteOn();
+	v->env2.noteOn();
+	noteIsOn = true;
+	writeNoteLED(midiNote);
+	s.soundingVoice = (int8_t)(v - voices);
+	s.soundingNote = midiNote;
+}
+
+void seqNoteOff(NoteSeq& s) {
+	if (s.soundingVoice < 0) return;
+	Voice& v = voices[s.soundingVoice];
+	if (v.active && v.note == s.soundingNote) { // still ours (not stolen meanwhile)
+		v.active = false;
+		v.env.noteOff();
+		v.env2.noteOff();
+	}
+	s.soundingVoice = -1;
+	bool anyHeld = false;
+	for (int i = 0; i < NUM_VOICES; i++) anyHeld |= voices[i].active;
+	noteIsOn = anyHeld;
+	if (!anyHeld) writeLED(false);
+}
+
+void seqAllNotesOff() { // stop/reset: silence both note sequencers' gates
+	for (byte i = 0; i < NUM_NOTE_SEQS; i++) {
+		seqNoteOff(noteSeqs[i]);
+		noteSeqs[i].gateTicks = 0;
 	}
 }
 
-void playNextStep() {
-	if (seqLength == 0) return; // empty sequence (e.g. mid-write): avoid % 0 → div-by-zero crash
-	seqCurrentStep++;
-	seqCurrentStep = seqCurrentStep % seqLength;
-	seqPlayStep(seqCurrentStep);
+// PERFORM page notes: same scale/pitch pipeline as the sequencer preview, but
+// through their own tracked voice so they never cut a sequencer's note off.
+void perfNoteOff() {
+	if (perfVoice < 0) return;
+	Voice& v = voices[perfVoice];
+	if (v.active && v.note == perfNote) { // still ours (not stolen meanwhile)
+		v.active = false;
+		v.env.noteOff();
+		v.env2.noteOff();
+	}
+	perfVoice = -1;
+	bool anyHeld = false;
+	for (int i = 0; i < NUM_VOICES; i++) anyHeld |= voices[i].active;
+	noteIsOn = anyHeld;
+	if (!anyHeld) writeLED(false);
 }
 
-void handleSeqClock() { // handle internal sequencer clock
-	seqIncrement++;
-
-	if (seqIncrement > seqNoteLength && noteIsOn) { // turn note off after it reached its length
-		HandleNoteOff(sequence[seqCurrentStep], 0);
-	}
-
-	if (seqIncrement > seqTempo) { // go to next step after prev step was nailored
-		playNextStep();
-		seqIncrement = 0;
-	}
+void perfPlay() { // (re)trigger the performed note from perfDeg/perfOct
+	if (!perfDeg) return;
+	perfNoteOff();
+	int n = SEQ_BASE_NOTE + SCALES[scaleIdx][(perfDeg - 1) % 12]
+	      + 12 * perfOct + transSeq.curVal; // rides the transpose seq like everything else
+	byte note = (byte)constrain(n, 0, 127);
+	Voice* v = allocVoiceFree();
+	v->note = note;
+	v->active = true;
+	v->age = ++voiceAge;
+	v->freq = mtof(float(note));
+	v->car.setFreq(v->freq);
+	v->env.noteOn();
+	v->env2.noteOn();
+	noteIsOn = true;
+	writeNoteLED(note);
+	perfVoice = (int8_t)(v - voices);
+	perfNote = note;
+	perfGateTicks = perfHold ? 0 : (12 + (unsigned int)perfGatePct * 5); // ~50ms..2s
 }
 
-void handleSequencer() {
-	if (internalClockSelect) {
-		handleSeqClock();
-	}
-	// external clock mode: steps come from MIDI clock (callbacks above) or
-	// manual stepping with the arcade button. The old LED-pin gate-sync input
-	// is gone along with the LEDs.
-	else if (midiClockRunning && millis() - lastMidiTickMs > 500) {
-		// no tick for 500ms (real clock ticks every ~21ms at 120bpm): the
-		// source is gone, or a stray tick at boot latched us here. Without
-		// this, a single spurious tick leaves a note hanging forever and
-		// permanently steals the arcade button's step function.
-		midiClockRunning = false;
-		HandleNoteOff(sequence[seqCurrentStep], 0);
-	}
+static inline uint32_t stepTicksFP() { // control ticks per global 16th step, 8.8 fixed
+	return (3840UL << 8) / bpm;        // 3840 = 60s * CONTROL_RATE / 4 steps-per-beat
 }
 
-void setWriteNote(byte thisNote) {
-	if (thisNote != noteSelect || refreshWriteNotePing) { // if we are on a new note
-		octOffset = writeOctSelect * 12;
-		noteSelect = thisNote;
-		HandleNoteOff(prevNoteSelect, 0);
-		noteToWrite = noteSelect + octOffset;
-		HandleNoteOn(noteToWrite, 127);
-		prevNoteSelect = noteSelect;
-		refreshWriteNotePing = false;
+unsigned int gateLenTicks(NoteSeq& s) { // gatePct% of this sequencer's own step period
+	unsigned int full = (unsigned int)((stepTicksFP() * SEQ_DIVS[s.divIdx]) >> 8);
+	unsigned int g = (unsigned int)((uint32_t)full * s.gatePct / 100);
+	if (g < 1) g = 1;
+	if (g > full) g = full;
+	return g;
+}
+
+bool nextStepIsTie(NoteSeq& s) { // look-ahead so a note can hold into a tie
+	byte next = s.playStep + 1;
+	byte part = s.curPart;
+	if (next >= s.part[part].length) { next = 0; part = s.pendingPart; }
+	return stepDeg(s.part[part].steps[next]) == STEP_TIE;
+}
+
+void seqAdvance(NoteSeq& s) {
+	s.playStep++;
+	if (s.playStep >= s.part[s.curPart].length) {
+		s.playStep = 0;
+		s.curPart = s.pendingPart; // queued part switch lands on the wrap
 	}
-}
-
-void writeToSeq() {
-	sequence[seqCurrentStep] = noteToWrite;
-	seqLength++; // extend sequence length
-	seqLength = seqLength % sizeof(sequence); // don't allow sequence longer than the buffer
-	seqCurrentStep++;
-	seqCurrentStep = seqCurrentStep % sizeof(sequence);
-}
-
-void writeSeqToEeprom() {
-	for (int i = 0; i < seqLength; i++) {
-		EEPROM.write(EE_SEQ_BASE + i, sequence[i]);
+	byte st = s.part[s.curPart].steps[s.playStep];
+	byte deg = stepDeg(st);
+	if (deg == STEP_REST) {
+		seqNoteOff(s);
+		s.gateTicks = 0;
 	}
-	EEPROM.write(EE_ADDR_LEN, seqLength);
-	EEPROM.write(EE_ADDR_MAGIC, EE_MAGIC);
-	EEPROM.commit(); // ESP32: actually persist to flash
-}
-
-void readSeqFromEeprom() {
-	seqLength = EEPROM.read(EE_ADDR_LEN); // need length first so we know how far to read
-	for (int i = 0; i < seqLength; i++) {
-		sequence[i] = EEPROM.read(EE_SEQ_BASE + i);
-	}
-}
-
-bool EEPROMwriting = false;    // flag to ignore all buttons until every button is released
-void seqCheckButts() {
-	if (EEPROMwriting) {
-		if (!(buttStates[BTN_A] || buttStates[BTN_B] || buttStates[BTN_SHIFT])) {
-			EEPROMwriting = false;
-		}
+	else if (deg == STEP_TIE) {
+		// extend the running note through this step (a tie after the gate already
+		// closed, or after a rest, is just more silence). gateTicks 0 = keep holding.
+		if (s.soundingVoice >= 0) s.gateTicks = nextStepIsTie(s) ? 0 : gateLenTicks(s);
 	}
 	else {
+		seqNoteOff(s); // mono: the previous note ends here whatever its gate had left
+		seqNoteOn(s, stepMidiNote(st));
+		s.gateTicks = nextStepIsTie(s) ? 0 : gateLenTicks(s);
+	}
+}
 
-		// BTN_A
+void transAdvance() {
+	transSeq.playStep++;
+	if (transSeq.playStep >= transSeq.part[transSeq.curPart].length) {
+		transSeq.playStep = 0;
+		transSeq.curPart = transSeq.pendingPart;
+	}
+	transSeq.curVal = transSeq.part[transSeq.curPart].steps[transSeq.playStep];
+}
 
-		if (buttStates[BTN_A] && !oldButtStates[BTN_A]) {
-			oldButtStates[BTN_A] = buttStates[BTN_A];
-			if (buttStates[BTN_B] && buttStates[BTN_SHIFT]) {
-				writeSeqToEeprom();
-				EEPROMwriting = true; // ignore all buttons until every button is released
-			}
-			else {
-				internalClockSelect = !internalClockSelect;       // toggle clock source
-				if (!internalClockSelect) {                       // landed on ext clock
-					HandleNoteOff(sequence[seqCurrentStep], 127); // stop any note that might be on
-					seqIncrement = seqTempo;                      // prime incrementor so it starts
-				}
-				else {                                            // landed on internal clock
-					seqCurrentStep = seqLength - 1;
-					seqIncrement = seqTempo;
-				}
-			}
+void doGlobalStep() { // one global 16th step, from the internal or MIDI clock
+	// transpose first, so a note landing on the same global step picks up the new
+	// value. Base rate = one transpose step per 16 global steps, times its divider.
+	if (transSeq.divCount == 0) transAdvance();
+	transSeq.divCount = (transSeq.divCount + 1) % (16 * SEQ_DIVS[transSeq.divIdx]);
+	for (byte i = 0; i < NUM_NOTE_SEQS; i++) {
+		NoteSeq& s = noteSeqs[i];
+		if (s.divCount == 0) seqAdvance(s);
+		s.divCount = (s.divCount + 1) % SEQ_DIVS[s.divIdx];
+	}
+}
+
+void resetAllSeqs() { // arcade button / MIDI start: everything restarts from the top
+	seqAllNotesOff();
+	for (byte i = 0; i < NUM_NOTE_SEQS; i++) {
+		NoteSeq& s = noteSeqs[i];
+		s.curPart = s.pendingPart;
+		s.playStep = s.part[s.curPart].length - 1; // first advance lands on step 0
+		s.divCount = 0;
+	}
+	transSeq.curPart = transSeq.pendingPart;
+	transSeq.playStep = transSeq.part[transSeq.curPart].length - 1;
+	transSeq.divCount = 0;
+	midiClockTicks = 0;
+	clockAcc = stepTicksFP(); // internal clock: fire the first step on the next tick
+}
+
+void handleSequencer() { // one call per control tick (256Hz)
+	// gate countdowns always run (they also time the knob-edit auditions)
+	for (byte i = 0; i < NUM_NOTE_SEQS; i++) {
+		NoteSeq& s = noteSeqs[i];
+		if (s.gateTicks && --s.gateTicks == 0) seqNoteOff(s);
+	}
+	if (perfGateTicks && --perfGateTicks == 0) perfNoteOff(); // PERFORM page note
+
+	if (midiClockRunning) {
+		// external clock owns the step timing; steps fire in handleMidiClockTicks().
+		// No tick for 500ms (a real clock ticks every ~21ms at 120bpm): the source
+		// is gone, fall back to the internal clock instead of hanging silent.
+		if (millis() - lastMidiTickMs > 500) {
+			midiClockRunning = false;
+			clockAcc = 0;
 		}
-		else if (!buttStates[BTN_A] && oldButtStates[BTN_A]) {
-			oldButtStates[BTN_A] = buttStates[BTN_A];
-		}
+		return;
+	}
+	if (!seqPlaying) return; // transport stopped: hold position, no stepping
+	clockAcc += 256; // one control tick in 8.8
+	uint32_t step = stepTicksFP();
+	if (clockAcc >= step) {
+		clockAcc -= step;
+		if (clockAcc >= step) clockAcc = 0; // tempo cranked up mid-run: no burst catch-up
+		doGlobalStep();
+	}
+}
 
-		// BUTTON 2
+void auditionStep(byte i) { // preview the edited step while twiddling knobs 1/2/4
+	NoteSeq& s = noteSeqs[i];
+	byte st = s.part[s.curPart].steps[s.editStep];
+	seqNoteOff(s);
+	s.gateTicks = 0;
+	byte deg = stepDeg(st);
+	if (deg >= 1 && deg <= 12) {
+		seqNoteOn(s, stepMidiNote(st));
+		s.gateTicks = 64; // ~250ms preview; the running clock overrides at its next step
+	}
+}
 
-		else if (buttStates[BTN_B] && !oldButtStates[BTN_B]) { // just pressed
-			oldButtStates[BTN_B] = buttStates[BTN_B];
-			if (buttStates[BTN_SHIFT]) {
-				// don't do nuttin cos we are preparing for 3 button EEPROM WRITE
-			}
-			else {
-				writeMode = true;
-				seqLength = 0;      // reset sequence length
-				seqCurrentStep = 0; // reset sequence
-			}
-		}
-		else if (!buttStates[BTN_B] && oldButtStates[BTN_B]) { // write button released!!!
-			seqCurrentStep = seqLength - 1;
-			writeMode = false;
-			HandleNoteOff(noteToWrite, 127);
-			oldButtStates[BTN_B] = buttStates[BTN_B];
-		}
+///////////////////////
+// SEQUENCER SETUP SLOTS (EEPROM, SET page SHIFT+A/B)
+///////////////////////
 
-		// BUTTON 3
+void saveSeqSetup(byte slot) {
+	SeqSetup q;
+	q.magic = SEQSET_MAGIC;
+	for (byte i = 0; i < NUM_NOTE_SEQS; i++) {
+		q.noteParts[i][0] = noteSeqs[i].part[0];
+		q.noteParts[i][1] = noteSeqs[i].part[1];
+		q.curPart[i] = noteSeqs[i].curPart;
+		q.gatePct[i] = noteSeqs[i].gatePct;
+		q.divIdx[i] = noteSeqs[i].divIdx;
+	}
+	q.transParts[0] = transSeq.part[0];
+	q.transParts[1] = transSeq.part[1];
+	q.transCurPart = transSeq.curPart;
+	q.transDivIdx = transSeq.divIdx;
+	q.scale = scaleIdx;
+	q.tempo = bpm;
+	EEPROM.put(EE_SEQSET_ADDR + slot * EE_SEQSET_STRIDE, q);
+	EEPROM.commit(); // flash write: expect a tiny audio hiccup, same as a preset save
+	seqSlotUsed[slot] = true;
+}
 
-		else if (buttStates[BTN_SHIFT] && !oldButtStates[BTN_SHIFT]) {
-			oldButtStates[BTN_SHIFT] = buttStates[BTN_SHIFT];
-			if (writeMode) {
-				noteToWrite = 0;
-				writeToSeq(); // write a pause
-			}
-		}
-		else if (!buttStates[BTN_SHIFT] && oldButtStates[BTN_SHIFT]) {
-			oldButtStates[BTN_SHIFT] = buttStates[BTN_SHIFT];
+bool loadSeqSetup(byte slot) {
+	SeqSetup q;
+	EEPROM.get(EE_SEQSET_ADDR + slot * EE_SEQSET_STRIDE, q);
+	if (q.magic != SEQSET_MAGIC) return false; // nothing saved in this slot yet
+	for (byte i = 0; i < NUM_NOTE_SEQS; i++) {
+		NoteSeq& s = noteSeqs[i];
+		s.part[0] = q.noteParts[i][0];
+		s.part[1] = q.noteParts[i][1];
+		s.part[0].length = constrain(s.part[0].length, 4, SEQ_MAX_STEPS);
+		s.part[1].length = constrain(s.part[1].length, 4, SEQ_MAX_STEPS);
+		s.curPart = q.curPart[i] & 1;
+		s.pendingPart = s.curPart;
+		s.gatePct = q.gatePct[i] > 100 ? 100 : q.gatePct[i];
+		s.divIdx = q.divIdx[i] % 5;
+		s.editStep = 0;
+	}
+	transSeq.part[0] = q.transParts[0];
+	transSeq.part[1] = q.transParts[1];
+	transSeq.part[0].length = constrain(transSeq.part[0].length, 4, SEQ_MAX_STEPS);
+	transSeq.part[1].length = constrain(transSeq.part[1].length, 4, SEQ_MAX_STEPS);
+	transSeq.curPart = q.transCurPart & 1;
+	transSeq.pendingPart = transSeq.curPart;
+	transSeq.divIdx = q.transDivIdx % 5;
+	transSeq.editStep = 0;
+	transSeq.curVal = 0;
+	scaleIdx = q.scale % NUM_SCALES;
+	bpm = constrain(q.tempo, 40, 240);
+	resetAllSeqs(); // resync playheads/counters to the loaded lengths
+	return true;
+}
+
+void initSeqDefaults() { // fresh boot: sane lengths + a small pattern in seq A
+	for (byte i = 0; i < NUM_NOTE_SEQS; i++) {
+		for (byte p = 0; p < 2; p++) {
+			memset(noteSeqs[i].part[p].steps, STEP_REST, SEQ_MAX_STEPS);
+			noteSeqs[i].part[p].length = 16;
 		}
 	}
+	for (byte p = 0; p < 2; p++) {
+		memset(transSeq.part[p].steps, 0, SEQ_MAX_STEPS);
+		transSeq.part[p].length = 4;
+	}
+	// seq A part A: a little something so a fresh unit makes sound
+	static const byte patt[16] = { 1,0,5,STEP_TIE, 3,0,8,0, 1,0,5,STEP_TIE, 3,0,10,8 };
+	for (byte i = 0; i < 16; i++) {
+		byte deg = patt[i];
+		noteSeqs[0].part[0].steps[i] = (deg && deg != STEP_TIE) ? ((1 << 4) | deg) : deg;
+	}
+}
+
+void seqCheckButts() { // SEQ page: A = next sequencer, B = part toggle; +SHIFT = copy/paste
+	// SHIFT changes what every knob on this page means: re-anchor them on both edges
+	if (buttStates[BTN_SHIFT] != oldButtStates[BTN_SHIFT]) {
+		lockKnobs();
+		oldButtStates[BTN_SHIFT] = buttStates[BTN_SHIFT];
+	}
+	if (buttStates[BTN_A] && !oldButtStates[BTN_A]) {
+		if (buttStates[BTN_SHIFT]) { // copy the current part (typed clipboards)
+			if (selSeq < NUM_NOTE_SEQS) {
+				noteClip = noteSeqs[selSeq].part[noteSeqs[selSeq].curPart];
+				noteClipValid = true;
+			}
+			else {
+				transClip = transSeq.part[transSeq.curPart];
+				transClipValid = true;
+			}
+		}
+		else {
+			selSeq = (selSeq + 1) % 3; // A -> B -> transpose -> A
+			lockKnobs(); // knob positions belong to the previous sequencer
+		}
+	}
+	if (buttStates[BTN_B] && !oldButtStates[BTN_B]) {
+		if (buttStates[BTN_SHIFT]) { // paste (only onto the same part type)
+			if (selSeq < NUM_NOTE_SEQS && noteClipValid) {
+				NoteSeq& s = noteSeqs[selSeq];
+				s.part[s.curPart] = noteClip;
+				if (s.editStep >= s.part[s.curPart].length) s.editStep = 0;
+			}
+			else if (selSeq == 2 && transClipValid) {
+				transSeq.part[transSeq.curPart] = transClip;
+				if (transSeq.editStep >= transSeq.part[transSeq.curPart].length) transSeq.editStep = 0;
+			}
+		}
+		else { // part toggle: instant (playhead carries on in the new part)
+			if (selSeq < NUM_NOTE_SEQS) {
+				NoteSeq& s = noteSeqs[selSeq];
+				s.curPart = !s.curPart;
+				s.pendingPart = s.curPart;
+				if (s.editStep >= s.part[s.curPart].length) s.editStep = 0;
+			}
+			else {
+				transSeq.curPart = !transSeq.curPart;
+				transSeq.pendingPart = transSeq.curPart;
+				if (transSeq.editStep >= transSeq.part[transSeq.curPart].length) transSeq.editStep = 0;
+			}
+		}
+	}
+	oldButtStates[BTN_A] = buttStates[BTN_A];
+	oldButtStates[BTN_B] = buttStates[BTN_B];
 }
 
 ///////////////////////
@@ -887,7 +1109,8 @@ void envCheckButts() { // ENV page: A toggles ENV1/ENV2, B toggles the mod-routi
 	oldButtStates[BTN_SHIFT] = buttStates[BTN_SHIFT];
 }
 
-void setCheckButts() { // SET page buttons: preset save/load through a 10-slot selector
+void setCheckButts() { // SET page buttons: preset save/load via a 10-slot selector,
+                       // sequencer-setup save/load via SHIFT+A/B and 4 slots
 	if (buttStates[BTN_A] && !oldButtStates[BTN_A]) {
 		if (presetSelMode == 1) {      // selector open in save mode: confirm
 			savePreset(presetSelSlot);
@@ -896,12 +1119,19 @@ void setCheckButts() { // SET page buttons: preset save/load through a 10-slot s
 			presetSelMode = 0;
 			lockKnobs(); // knob 1 was scrolling slots — don't let it stomp 7BIT now
 		}
-		else if (presetSelMode == 2) { // other button while open = cancel
+		else if (presetSelMode == 3) { // seq-save selector open: confirm
+			saveSeqSetup(presetSelSlot);
+			presetMsg = 1;
+			presetMsgUntil = millis() + 1200;
+			presetSelMode = 0;
+			lockKnobs();
+		}
+		else if (presetSelMode) {      // other button while open = cancel
 			presetSelMode = 0;
 			lockKnobs();
 		}
 		else {
-			presetSelMode = 1;         // open the save selector
+			presetSelMode = buttStates[BTN_SHIFT] ? 3 : 1; // open save selector (SHIFT = seq)
 		}
 	}
 	else if (buttStates[BTN_B] && !oldButtStates[BTN_B]) {
@@ -911,16 +1141,23 @@ void setCheckButts() { // SET page buttons: preset save/load through a 10-slot s
 			presetSelMode = 0;
 			lockKnobs(); // loadPreset locks too, but cover the "NO PRESET" path
 		}
-		else if (presetSelMode == 1) { // other button while open = cancel
+		else if (presetSelMode == 4) { // seq-load selector open: confirm
+			presetMsg = loadSeqSetup(presetSelSlot) ? 2 : 3;
+			presetMsgUntil = millis() + 1200;
+			presetSelMode = 0;
+			lockKnobs();
+		}
+		else if (presetSelMode) {      // other button while open = cancel
 			presetSelMode = 0;
 			lockKnobs();
 		}
 		else {
-			presetSelMode = 2;         // open the load selector
+			presetSelMode = buttStates[BTN_SHIFT] ? 4 : 2; // open load selector (SHIFT = seq)
 		}
 	}
 	oldButtStates[BTN_A] = buttStates[BTN_A];
 	oldButtStates[BTN_B] = buttStates[BTN_B];
+	oldButtStates[BTN_SHIFT] = buttStates[BTN_SHIFT];
 }
 
 ///////////////////////
@@ -931,13 +1168,22 @@ void setCheckButts() { // SET page buttons: preset save/load through a 10-slot s
 // reads the globals above — a torn read once in a while just means one frame
 // shows a value a tick late, which doesn't matter at 15fps.
 
-const char* PAGE_NAMES[6]  = { "MAIN", "AMPENV", "LFO", "VERB", "H4XX", "SEQ" };
+const char* PAGE_NAMES[PG_COUNT] = { "MAIN", "AMPENV", "LFO", "VERB", "H4XX", "SEQ", "PERF" };
+const char* DIV_NAMES[5]   = { "1/1", "1/3", "1/4", "1/6", "1/8" };
 const char* WAVE_NAMES[4]  = { "SIN", "TRI", "SAW", "SQR" };
 const char* LFO_DESTS[4]   = { "PITCH", "FILTER", "FM", "-" };
 const char* NOTE_NAMES[12] = { "C","C#","D","D#","E","F","F#","G","G#","A","A#","B" };
 
 void noteName(byte n, char* buf, size_t len) {
 	snprintf(buf, len, "%s%d", NOTE_NAMES[n % 12], n / 12 - 1);
+}
+
+void drawPageDots(byte page) { // top-right page indicator, one box per page
+	const int x0 = 128 - PG_COUNT * 9; // right-aligned strip, 9px pitch
+	for (byte i = 0; i < PG_COUNT; i++) {
+		if (i == page) oled.fillRect(x0 + i * 9, 4, 6, 6, SSD1306_WHITE);
+		else           oled.drawRect(x0 + i * 9, 4, 6, 6, SSD1306_WHITE);
+	}
 }
 
 // heartbeat spinner, bottom right: if it stops turning, this task has died
@@ -952,28 +1198,115 @@ void drawSpinner() {
 	}
 }
 
+// the SEQ page has its own full-screen layout: step grid + status lines
+void drawSeqPage() {
+	byte sel = selSeq; // snapshots — core 1 mutates freely, a same-frame tear is harmless
+	bool isNote = (sel < NUM_NOTE_SEQS);
+	byte cp, len, playS, editS, dv;
+	if (isNote) {
+		NoteSeq& s = noteSeqs[sel];
+		cp = s.curPart; len = s.part[cp].length;
+		playS = s.playStep; editS = s.editStep; dv = s.divIdx;
+	}
+	else {
+		cp = transSeq.curPart; len = transSeq.part[cp].length;
+		playS = transSeq.playStep; editS = transSeq.editStep; dv = transSeq.divIdx;
+	}
+	if (len < 4) len = 4;
+	if (len > SEQ_MAX_STEPS) len = SEQ_MAX_STEPS;
+	if (editS >= len) editS = len - 1;
+	if (playS >= len) playS = len - 1;
+
+	oled.clearDisplay();
+	oled.setTextSize(2);
+	oled.setCursor(0, 0);
+	oled.print(sel == 0 ? "SEQ A" : sel == 1 ? "SEQ B" : "TRNSP");
+	drawPageDots(PG_SEQ);
+	oled.setTextSize(1);
+
+	// step grid: 8px cells, up to 2 rows of 16. Bar height = octave (note seqs)
+	// or signed transpose amount; flat bar = tie, dot = rest / zero transpose.
+	bool blink = (millis() >> 7) & 1;
+	for (byte i = 0; i < len; i++) {
+		int x = (i % 16) * 8;
+		int y = 17 + (i / 16) * 10;
+		if (isNote) {
+			byte st = noteSeqs[sel].part[cp].steps[i];
+			byte deg = st & 0x0F;
+			if (deg == STEP_TIE)  oled.fillRect(x, y + 3, 7, 2, SSD1306_WHITE);
+			else if (deg) {
+				byte h = 3 + ((st >> 4) & 0x07); // taller bar = higher octave
+				oled.fillRect(x, y + 7 - h, 7, h, SSD1306_WHITE);
+			}
+			else oled.drawPixel(x + 3, y + 6, SSD1306_WHITE); // rest
+		}
+		else {
+			int8_t v = transSeq.part[cp].steps[i];
+			byte h = (byte)((abs(v) * 3) / 12 + 1); // 1..4 from the middle line
+			if (v > 0)      oled.fillRect(x, y + 4 - h, 7, h, SSD1306_WHITE);
+			else if (v < 0) oled.fillRect(x, y + 4, 7, h, SSD1306_WHITE);
+			else            oled.fillRect(x, y + 3, 7, 1, SSD1306_WHITE);
+		}
+		if (i == playS) oled.drawFastHLine(x, y + 8, 7, SSD1306_WHITE); // playhead
+		if (i == editS && blink) oled.drawRect(x - 1, y - 1, 9, 9, SSD1306_WHITE); // edit cursor
+	}
+
+	// edit-step readout + the per-sequencer settings
+	char line[24];
+	if (isNote) {
+		byte st = noteSeqs[sel].part[cp].steps[editS];
+		byte deg = st & 0x0F;
+		char nn[8];
+		if (deg == STEP_REST)     snprintf(nn, 8, "REST");
+		else if (deg == STEP_TIE) snprintf(nn, 8, "TIE");
+		else noteName(SEQ_BASE_NOTE + SCALES[scaleIdx][deg - 1] + 12 * ((st >> 4) & 0x07), nn, 8);
+		snprintf(line, 24, "S%02u %-4s G:%u%% L:%u", editS + 1, nn, noteSeqs[sel].gatePct, len);
+	}
+	else {
+		snprintf(line, 24, "S%02u %+d  L:%u", editS + 1, transSeq.part[cp].steps[editS], len);
+	}
+	oled.setCursor(0, 39);
+	oled.print(line);
+	snprintf(line, 24, "%s %uBPM %s%s", SCALE_NAMES[scaleIdx], bpm, DIV_NAMES[dv],
+	         isNote ? "" : " x16");
+	oled.setCursor(0, 48);
+	oled.print(line);
+
+	// footer: part + playhead position + transport / clock source
+	const char* clk = !seqPlaying ? "STOP" : (midiClockRunning ? "EXT" : ">");
+	snprintf(line, 24, "PART %c    %u/%u %s", cp ? 'B' : 'A', playS + 1, len, clk);
+	oled.setCursor(0, 56);
+	oled.print(line);
+
+	drawSpinner();
+	oled.display();
+}
+
 void drawUI() {
 	const char* lab[4];
 	char val[4][16];
 	byte page = pageState; // snapshot, core 1 may change it mid-draw
 
-	// the preset slot selector takes over the whole screen while open
+	// the preset / seq-setup slot selector takes over the whole screen while open
 	if (page == PG_HAXX && presetSelMode) {
 		byte mode = presetSelMode; // snapshot both, core 1 may change them mid-draw
 		byte sel = presetSelSlot;
+		bool seqMode = (mode >= 3); // 3/4 = sequencer-setup slots
+		byte nSlots = seqMode ? NUM_SEQ_SLOTS : NUM_PRESETS;
 		oled.clearDisplay();
 		oled.setTextSize(2);
 		oled.setCursor(0, 0);
-		oled.print(mode == 1 ? "SAVE TO" : "LOAD");
+		if (seqMode) oled.print(mode == 3 ? "SEQ SAVE" : "SEQ LOAD");
+		else         oled.print(mode == 1 ? "SAVE TO" : "LOAD");
 		oled.setTextSize(1);
-		for (byte i = 0; i < NUM_PRESETS; i++) { // 2 rows x 5 slots; box = saved, filled = selected
-			int bx = 4 + (i % 5) * 24;
-			int by = 24 + (i / 5) * 17;
+		for (byte i = 0; i < nSlots; i++) { // box = saved, filled = selected
+			int bx = seqMode ? 12 + i * 28 : 4 + (i % 5) * 24;
+			int by = seqMode ? 28 : 24 + (i / 5) * 17;
 			if (i == sel) {
 				oled.fillRect(bx, by, 20, 13, SSD1306_WHITE);
 				oled.setTextColor(SSD1306_BLACK);
 			}
-			else if (presetUsed[i]) {
+			else if (seqMode ? seqSlotUsed[i] : presetUsed[i]) {
 				oled.drawRect(bx, by, 20, 13, SSD1306_WHITE);
 			}
 			oled.setCursor(bx + (i == 9 ? 5 : 8), by + 3);
@@ -981,9 +1314,14 @@ void drawUI() {
 			oled.setTextColor(SSD1306_WHITE);
 		}
 		oled.setCursor(0, 56);
-		oled.print(mode == 1 ? "K1:PICK A:SAVE PG:X" : "K1:PICK B:LOAD PG:X");
+		oled.print((mode == 1 || mode == 3) ? "K1:PICK A:SAVE PG:X" : "K1:PICK B:LOAD PG:X");
 		drawSpinner();
 		oled.display();
+		return;
+	}
+
+	if (page == PG_SEQ) { // fully custom layout (step grid), drawn separately
+		drawSeqPage();
 		return;
 	}
 
@@ -1033,20 +1371,16 @@ void drawUI() {
 		lab[0] = "7BIT";   snprintf(val[0], 16, "%s", bit7Mode ? "ON" : "OFF");
 		lab[3] = "FILTER"; snprintf(val[3], 16, "%s", polyFilter ? "POLY" : "PARA");
 		break;
-	case PG_SEQ:
-		if (internalClockSelect) {
-			lab[0] = "TEMPO"; snprintf(val[0], 16, "%u", seqTempo);
-			lab[1] = "GATE";  snprintf(val[1], 16, "%u", seqNoteLength);
-		}
-		else {
-			lab[0] = "CLK STEP"; snprintf(val[0], 16, "%u ticks", midiClockStepSize);
-			lab[1] = "GATE";     snprintf(val[1], 16, "%u", midiSeqNoteLength);
-		}
-		lab[2] = "NOTE";
-		if (writeMode) noteName(noteToWrite, val[2], 16);
-		else           snprintf(val[2], 16, "-");
-		lab[3] = "OCT"; snprintf(val[3], 16, "%+d", octTranspose);
+	case PG_PERF: { // MAIN's tone knobs + live scale-note playing
+		lab[0] = "FM/RAT";  snprintf(val[0], 16, "%ld/%d", fm_intensity, mod_ratio);
+		lab[1] = "CUT/RES"; snprintf(val[1], 16, "%u/%u", lpfCutoff, lpfRes);
+		char nn[8];
+		if (perfDeg) noteName(SEQ_BASE_NOTE + SCALES[scaleIdx][(perfDeg - 1) % 12] + 12 * perfOct, nn, 8);
+		else { nn[0] = '-'; nn[1] = '\0'; }
+		lab[2] = "NOTE/GT"; snprintf(val[2], 16, "%s%s/%u%%", nn, (perfHold && perfDeg) ? "~" : "", perfGatePct);
+		lab[3] = "OCT/SCL"; snprintf(val[3], 16, "%u/%s", perfOct, SCALE_NAMES[scaleIdx]);
 		break;
+	}
 	}
 
 	oled.clearDisplay();
@@ -1069,10 +1403,7 @@ void drawUI() {
 		}
 	}
 	else oled.print(PAGE_NAMES[page]);
-	for (byte i = 0; i < 6; i++) {
-		if (i == page) oled.fillRect(74 + i * 9, 4, 6, 6, SSD1306_WHITE);
-		else           oled.drawRect(74 + i * 9, 4, 6, 6, SSD1306_WHITE);
-	}
+	drawPageDots(page);
 
 	oled.setTextSize(1);
 	for (byte i = 0; i < 4; i++) {
@@ -1083,17 +1414,6 @@ void drawUI() {
 		oled.setCursor(64, y);
 		if (knobLock[i]) oled.print('*'); // knob not picked up since page change
 		oled.print(val[i]);
-	}
-
-	// footer on the SEQ page: clock source, write/play state, position
-	if (page == PG_SEQ) {
-		char foot[24];
-		snprintf(foot, 24, "%s %s %u/%u",
-		         internalClockSelect ? "INT" : (midiClockRunning ? "EXT>" : "EXT"),
-		         writeMode ? "REC" : (noteIsOn ? ">" : " "),
-		         seqCurrentStep + 1, seqLength);
-		oled.setCursor(0, 56);
-		oled.print(foot);
 	}
 
 	// footer on the ENV page: which envelope / mode the knobs are editing
@@ -1119,7 +1439,7 @@ void drawUI() {
 			                          : "NO PRESET");
 		}
 		else {
-			oled.print("A:SAVE  B:LOAD");
+			oled.print("A/B:PATCH +SH:SEQ");
 		}
 	}
 
@@ -1127,7 +1447,15 @@ void drawUI() {
 	oled.display();
 }
 
-// boot splash: the gateXtal wordmark with a little play-triangle glyph
+// boot splash 1: Captain Credible logo (full-screen 128x64 bitmap from
+// CCLOGO_bitmap.h), shown briefly before the gateXtal wordmark takes over
+void drawLogoSplash() {
+	oled.clearDisplay();
+	oled.drawBitmap(0, 0, bitmap, 128, 64, SSD1306_WHITE);
+	oled.display();
+}
+
+// boot splash 2: the gateXtal wordmark with a little play-triangle glyph
 void drawSplash() {
 	oled.clearDisplay();
 	oled.setTextSize(2);
@@ -1155,6 +1483,8 @@ void displayTask(void*) {
 	}
 	oled.setTextColor(SSD1306_WHITE);
 	oled.setTextWrap(false);
+	drawLogoSplash();
+	vTaskDelay(pdMS_TO_TICKS(1200)); // hold the logo, then hand off to the wordmark
 	drawSplash();
 	vTaskDelay(pdMS_TO_TICKS(1500)); // hold the splash before the UI takes over
 	for (;;) {
@@ -1183,12 +1513,15 @@ void setup() {
 #endif
 
 	EEPROM.begin(EEPROM_SIZE);
-	if (EEPROM.read(EE_ADDR_MAGIC) == EE_MAGIC) {
-		readSeqFromEeprom();
-	}
 	for (byte i = 0; i < NUM_PRESETS; i++) { // scan which slots hold a patch, for the selector UI
 		presetUsed[i] = (EEPROM.read(EE_PRESET_ADDR + i * EE_PRESET_STRIDE) == PRESET_MAGIC);
 	}
+	for (byte i = 0; i < NUM_SEQ_SLOTS; i++) { // same for the sequencer-setup slots
+		seqSlotUsed[i] = (EEPROM.read(EE_SEQSET_ADDR + i * EE_SEQSET_STRIDE) == SEQSET_MAGIC);
+	}
+	initSeqDefaults();
+	loadSeqSetup(0); // boot into seq slot 1 if it holds a setup; no-op if empty
+	resetAllSeqs();  // prime the playheads; transport boots stopped (SHIFT+arcade starts it)
 
 	for (int i = 0; i < 4; i++) {
 		pinMode(BUTTONS[i], INPUT_PULLUP);
@@ -1344,26 +1677,21 @@ void updateControl() {
 	//// HANDLE ARCADE BUTTON ////
 	//////////////////////////////
 
-	if (ArcadeState && !oldArcadeState) { // if Arcadebutton is Pressed
-
-		if (pageState == PG_SEQ && buttStates[BTN_B]) {
-			writeToSeq();
+	if (ArcadeState && !oldArcadeState) { // pressed
+		if (buttStates[BTN_SHIFT]) {      // SHIFT+arcade: play / stop
+			seqPlaying = !seqPlaying;
+			if (seqPlaying) resetAllSeqs(); // play always starts from the top
+			else            seqAllNotesOff();
 		}
-		else if (!internalClockSelect && !midiClockRunning) {
-			playNextStep();
+		else if (!seqPlaying) {           // stopped: step everything forward by hand
+			doGlobalStep();               // (dividers/transpose advance just like the clock)
 		}
-		else {
-			seqCurrentStep = seqLength - 1; // move to the last step
-			seqIncrement = seqTempo;        // prime incrementor to roll over and thus trigger first step
-			midiClockTicks = 0;
+		else {                            // running: restart every sequencer from step 1
+			resetAllSeqs();
 		}
-
 		oldArcadeState = ArcadeState;
 	}
 	else if (!ArcadeState && oldArcadeState) {
-		if (!writeMode) {
-			HandleNoteOff(arcadeNote, 0);
-		}
 		oldArcadeState = ArcadeState;
 	}
 
@@ -1377,6 +1705,7 @@ void updateControl() {
 
 		switch (pageState) {
 		case PG_MAIN:
+		case PG_PERF: // PERFORM shares MAIN's knob 1
 			if (buttStates[BTN_SHIFT]) mod_ratio = (val >> 6); // SHIFT: RATIO
 			else                       fm_intensity = (float(val));
 			break;
@@ -1408,21 +1737,27 @@ void updateControl() {
 			bit7Mode = (val >= 512); // knob as a switch: right half = crunch
 			break;
 		case PG_SEQ:
-			if (internalClockSelect) {
-				seqTempo = (val >> 3) + 3;        // SCALE DOWN
-				seqTempo = (seqTempo * -1) + 130; // INVERT
-				seqTempo *= 2;                    // CONTROL_RATE 256: ticks are half as long
+			if (buttStates[BTN_SHIFT]) { // SHIFT: gate length 0-100%, global for this sequencer
+				if (selSeq < NUM_NOTE_SEQS) noteSeqs[selSeq].gatePct = (byte)((val * 100L) / 1023);
 			}
-			else {
-				byte divisor = (val >> 7) % 4; // divisor is 01230123
-
-				int tempVal = val - 512; // scale around 0
-				if (tempVal <= 0) {
-					midiClockStepSize = 24 >> divisor;
-				}
+			else if (selSeq < NUM_NOTE_SEQS) { // note for the edit step:
+				NoteSeq& s = noteSeqs[selSeq];  // bottom = rest, top = tie, middle = scale degrees
+				byte deg;
+				if (val < 40)       deg = STEP_REST;
+				else if (val > 983) deg = STEP_TIE;
 				else {
-					midiClockStepSize = 16 >> divisor;
+					deg = 1 + (byte)(((uint32_t)(val - 40) * 12) / 944);
+					if (deg > 12) deg = 12;
 				}
+				byte& st = s.part[s.curPart].steps[s.editStep];
+				if ((st & 0x0F) != deg) {
+					st = (st & 0xF0) | deg;
+					auditionStep(selSeq);
+				}
+			}
+			else { // transpose sequencer: semitone offset -12..+12 for the edit step
+				transSeq.part[transSeq.curPart].steps[transSeq.editStep] =
+					(int8_t)map(val, 0, 1023, -12, 12);
 			}
 			break;
 		}
@@ -1439,6 +1774,7 @@ void updateControl() {
 
 		switch (pageState) {
 		case PG_MAIN:
+		case PG_PERF: // PERFORM shares MAIN's knob 2
 			if (buttStates[BTN_SHIFT]) { // SHIFT: RES
 				lpfRes = val >> 2;
 				lpf.setResonance((uint16_t)lpfRes << 8);
@@ -1473,8 +1809,21 @@ void updateControl() {
 			break;
 		// PG_HAXX knob 2 is now unused (OSC VOL moved to MAIN knob 4)
 		case PG_SEQ:
-			seqNoteLength = map(val, 0, 1024, 0, seqTempo);
-			midiSeqNoteLength = val >> 5; // scale val 0-32
+			if (buttStates[BTN_SHIFT]) { // SHIFT: scale select, global for everything
+				scaleIdx = (byte)((val * NUM_SCALES) >> 10);
+				if (scaleIdx >= NUM_SCALES) scaleIdx = NUM_SCALES - 1;
+			}
+			else if (selSeq < NUM_NOTE_SEQS) { // octave 0..4 for the edit step
+				NoteSeq& s = noteSeqs[selSeq];
+				byte oct = (byte)((val * 5) >> 10);
+				if (oct > 4) oct = 4;
+				byte& st = s.part[s.curPart].steps[s.editStep];
+				if ((st >> 4) != oct) {
+					st = (st & 0x0F) | (oct << 4);
+					auditionStep(selSeq);
+				}
+			}
+			// transpose seq has no octave; knob 2 does nothing there
 			break;
 		}
 		oldMozziRaw[h4xxKnob] = mozziRaw[h4xxKnob];
@@ -1521,8 +1870,44 @@ void updateControl() {
 			break;
 		// PG_HAXX knob 3 is now unused (LIM THR moved to MAIN knob 4)
 		case PG_SEQ:
-			if (buttStates[BTN_B]) {
-				setWriteNote(val >> 6);
+			if (buttStates[BTN_SHIFT]) { // SHIFT: clock divider for this sequencer
+				byte d = (byte)((val * 5) >> 10);
+				if (d > 4) d = 4;
+				if (selSeq < NUM_NOTE_SEQS) noteSeqs[selSeq].divIdx = d;
+				else                        transSeq.divIdx = d;
+			}
+			else { // global tempo
+				bpm = map(val, 0, 1023, 40, 240);
+			}
+			break;
+		case PG_PERF:
+			if (buttStates[BTN_SHIFT]) { // SHIFT: gate length for performed notes
+				perfGatePct = (byte)((val * 100L) / 1023);
+			}
+			else { // play: bottom = silence, top = hold/drone, middle = scale degrees
+				if (val < 40) {
+					perfHold = false;
+					perfDeg = 0;
+					perfGateTicks = 0;
+					perfNoteOff();
+				}
+				else if (val > 983) {
+					perfHold = true;
+					perfGateTicks = 0;             // sustain whatever is ringing
+					if (perfVoice < 0) perfPlay(); // re-strike if it already gated off
+				}
+				else {
+					byte deg = 1 + (byte)(((uint32_t)(val - 40) * 12) / 944);
+					if (deg > 12) deg = 12;
+					perfHold = false;
+					if (deg != perfDeg || perfVoice < 0) {
+						perfDeg = deg;
+						perfPlay();
+					}
+					else { // same note, still ringing: keep it fed while the knob moves
+						perfGateTicks = 12 + (unsigned int)perfGatePct * 5;
+					}
+				}
 			}
 			break;
 		default:
@@ -1566,19 +1951,44 @@ void updateControl() {
 			polyFilter = (val >= 512); // left = PARA (one filter), right = POLY (filter per voice)
 			break;
 		case PG_SEQ:
-			if (val >> 7 != writeOctSelect) {
-				if (buttStates[BTN_B] && writeMode) {
-					writeOctSelect = val >> 7; // 0-8
-					refreshWriteNotePing = true;
-					setWriteNote(noteSelect);
+			if (buttStates[BTN_SHIFT]) { // SHIFT: part length 4..32
+				byte len = 4 + (byte)((val * 29L) >> 10);
+				if (len > SEQ_MAX_STEPS) len = SEQ_MAX_STEPS;
+				if (selSeq < NUM_NOTE_SEQS) {
+					NoteSeq& s = noteSeqs[selSeq];
+					s.part[s.curPart].length = len;
+					if (s.editStep >= len) s.editStep = len - 1;
 				}
-				else if (buttStates[BTN_B]) {
+				else {
+					transSeq.part[transSeq.curPart].length = len;
+					if (transSeq.editStep >= len) transSeq.editStep = len - 1;
 				}
-				else { // if knob is twiddled and no butts are true
-					octTranspose = val >> 7; // 0-8
-					writeOctSelect = octTranspose;
-					octTranspose = octTranspose - 4;
-					applyOctTranspose(); // slide held voices without retrigging their ADSRs
+			}
+			else { // edit-step select: sweeps the sequence, auditioning as it goes
+				if (selSeq < NUM_NOTE_SEQS) {
+					NoteSeq& s = noteSeqs[selSeq];
+					byte st = (byte)((val * s.part[s.curPart].length) >> 10);
+					if (st != s.editStep) {
+						s.editStep = st;
+						auditionStep(selSeq);
+					}
+				}
+				else {
+					transSeq.editStep = (byte)((val * transSeq.part[transSeq.curPart].length) >> 10);
+				}
+			}
+			break;
+		case PG_PERF:
+			if (buttStates[BTN_SHIFT]) { // SHIFT: scale select, global (same as SEQ SHIFT+K2)
+				scaleIdx = (byte)((val * NUM_SCALES) >> 10);
+				if (scaleIdx >= NUM_SCALES) scaleIdx = NUM_SCALES - 1;
+			}
+			else { // octave for the performed notes
+				byte oct = (byte)((val * 5) >> 10);
+				if (oct > 4) oct = 4;
+				if (oct != perfOct) {
+					perfOct = oct;
+					if (perfVoice >= 0) perfPlay(); // re-pitch the ringing note
 				}
 			}
 			break;
@@ -1603,9 +2013,16 @@ void updateControl() {
 	else if (pageState == PG_SEQ) {
 		seqCheckButts();
 	}
+	else if (pageState == PG_PERF) { // SHIFT flips the knob meanings: re-anchor on edges
+		if (buttStates[BTN_SHIFT] != oldButtStates[BTN_SHIFT]) lockKnobs();
+		oldButtStates[BTN_A] = buttStates[BTN_A];
+		oldButtStates[BTN_B] = buttStates[BTN_B];
+		oldButtStates[BTN_SHIFT] = buttStates[BTN_SHIFT];
+	}
 	else if (pageState == PG_HAXX) { // H4XX page: preset save/load buttons + slot selector
-		if (presetSelMode) {
-			presetSelSlot = constrain(mozziRaw[FMknob] / 103, 0, NUM_PRESETS - 1); // knob 1 scrolls
+		if (presetSelMode) { // knob 1 scrolls the slots (10 presets / 4 seq setups)
+			byte n = (presetSelMode >= 3) ? NUM_SEQ_SLOTS : NUM_PRESETS;
+			presetSelSlot = constrain((mozziRaw[FMknob] * n) >> 10, 0, n - 1);
 		}
 		setCheckButts();
 	}
@@ -1771,13 +2188,18 @@ AudioOutput updateAudio() {
 	float mL = dry + mid + side;
 	float mR = dry + mid - side;
 
-	// peak limiter: instant attack, ~100ms release. Ducks by exactly the
-	// overshoot, so chords come down transparently instead of flat-topping.
+	// peak limiter: instant-attack envelope with ~15ms hold and ~100ms release,
+	// applied through a ~1ms-slewed gain. The hold keeps the envelope from
+	// rippling at the signal's own frequency (audible as intermod distortion on
+	// bass/stacked notes), and the gain slew removes the attack discontinuity.
 	// Drive it from the louder channel so the stereo image isn't skewed.
 	float level = fmaxf(fabsf(mL), fabsf(mR));
-	if (level > limEnv) limEnv = level;
+	if (level > limEnv) { limEnv = level; limHold = LIM_HOLD; }
+	else if (limHold)   limHold--;
 	else                limEnv *= LIM_RELEASE;
-	if (limEnv > limThresh) { float g = limThresh / limEnv; mL *= g; mR *= g; }
+	float gTarget = (limEnv > limThresh) ? limThresh / limEnv : 1.0f;
+	limGain += (gTarget - limGain) * LIM_GAIN_SLEW;
+	mL *= limGain; mR *= limGain;
 
 	return StereoOutput::fromNBit(17, (int)(softClip(mL) * 65535.0f),
 	                                 (int)(softClip(mR) * 65535.0f));
