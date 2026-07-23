@@ -132,7 +132,7 @@ int KNOBS[4] = { 2, 3, 4, 5 };
 #define EE_PRESET_ADDR   260  // preset slots live above the sequence
 #define EE_PRESET_STRIDE 96   // bytes per slot (struct is ~72, rounded up for future fields)
 #define NUM_PRESETS      10   // 260 + 10*96 = 1220, fits EEPROM_SIZE with room to spare
-#define PRESET_MAGIC     0x45 // bumped when the struct layout changes: old presets read as empty
+#define PRESET_MAGIC     0x48 // bumped when the struct layout changes: old presets read as empty
 
 struct Preset { // everything that makes the sound; saved/loaded on the SET page
 	byte magic;
@@ -140,7 +140,7 @@ struct Preset { // everything that makes the sound; saved/loaded on the SET page
 	byte lpfCutoff, lpfRes;
 	byte mod_ratio;
 	byte lfoDest, lfoWaveSelect;
-	byte bit7;
+	byte bitDepth; // 1 = extreme crush .. 16 = full resolution
 	byte env2FM, env2Filt, env2Ratio; // ENV2 routing amounts (FM / filter / ratio)
 	byte polyFilt; // 0 = PARA (one filter on the sum), 1 = POLY (filter per voice)
 	int32_t fmIntensity;
@@ -149,7 +149,9 @@ struct Preset { // everything that makes the sound; saved/loaded on the SET page
 	float lfoRate, modDepth;
 	float rvSize, rvDamp, rvMix;
 	float oscVol, limThresh;
-	float rvSpread; // reverb stereo width; appended last so old presets stay readable
+	float rvSpread; // reverb stereo width
+	byte polyphony;  // 1..8 max simultaneous voices
+	uint16_t srDiv;  // sample-rate reduction divisor, 1 (32768Hz) .. MAX_SR_DIV (256 = 128Hz)
 };
 static_assert(sizeof(Preset) <= EE_PRESET_STRIDE, "Preset struct outgrew its EEPROM slot");
 
@@ -268,6 +270,11 @@ byte pageState = 0;
 enum Page { PG_MAIN = 0, PG_ENV, PG_LFO, PG_VERB, PG_HAXX, PG_SEQ, PG_PERF, PG_COUNT };
 int8_t lfoOutput = 0;  // value to store current offset from root
 int mod_ratio = 3;
+// ceiling for mod_ratio (MAIN/PERF SHIFT+K1) and the ratioNow it feeds into below.
+// Was hardwired to 15 (-> an 8x max FM multiplier, see ratioNow in updateControl);
+// raise this to unlock steeper ratios. No UI control for it on purpose — it's a
+// source-level tuning knob, edit and reflash to try a new ceiling.
+byte maxRatio = 32;
 long fm_intensity = 0;
 byte waveformselect = 0;
 byte lastNote = 0;
@@ -300,8 +307,13 @@ USBCDC SerialCDC(0); // USB serial port for debugging + upload auto-reset
                      // (the core's USBSerial global only exists with CDC_ON_BOOT=1,
                      // which we avoid so USB.productName() can apply)
 
-// ------- VOICES (4-voice polyphony, one shared LFO) -------
-#define NUM_VOICES 4
+// ------- VOICES (up to 8-voice polyphony, one shared LFO) -------
+// NUM_VOICES is the hard array size; `polyphony` (H4XX page knob 1, 1..NUM_VOICES)
+// is the runtime limit — allocVoice()/allocVoiceFree() only ever pick voices below
+// it, so idle voices above the limit just sit there costing nothing (updateAudio's
+// per-voice loop already skips any voice that isn't active/releasing).
+#define NUM_VOICES 8
+byte polyphony = 4; // default matches the original 4-voice build
 struct Voice {
 	Oscil <SIN1024_NUM_CELLS, MOZZI_AUDIO_RATE> car{ SIN1024_DATA }; // carrier
 	Oscil <SIN1024_NUM_CELLS, MOZZI_AUDIO_RATE> mod{ SIN1024_DATA }; // FM modulator
@@ -336,7 +348,20 @@ byte envSelect = 0;        // ENV page: 0 = knobs edit ENV1 (amp), 1 = knobs edi
 bool envRouteView = false; // ENV page: B3 toggles the ENV2 routing view
 byte env2FM = 0, env2Filt = 0, env2Ratio = 0;   // routing amounts, 0-255 (reverb send removed)
 int e2Attack = 100, e2Decay = 200, e2Sustain = 240, e2Release = 200; // OLED shadows for ENV2
-bool bit7Mode = false; // H4XX page: crush the synth back to the old AVR's ~7-bit resolution, for crunch
+
+// H4XX page: bit-depth crush (1 = extreme .. 16 = full resolution, knob left->right)
+// and a sample-rate reducer (decimator — see updateAudio), both lo-fi output effects
+// rather than real DAC/ADC reconfiguration: Mozzi's audio rate is a compile-time
+// constant baked into every Oscil's phase math, so it can't change at runtime.
+// Decimating the finished output (holding samples for `sampleRateDiv` ticks) is the
+// standard way synths fake a lower rate — same aliased, gritty result a real rate
+// change would give, and unlike the old power-of-two-only version any integer
+// divisor works, so every intermediate rate is reachable, not just octave steps.
+byte bitDepth = 16;
+#define MAX_SR_DIV 256                // knob's far left = 32768/256 = 128Hz
+#define SR_DEADZONE 102               // ~10% of travel at the knob's far right,
+                                      // pinned to divisor 1 (32768Hz, uncrushed)
+unsigned int sampleRateDiv = 1;
 
 // output stage (post reverb mix): peak limiter into a tanh-shaped saturator.
 // Single notes pass untouched, stacked voices get transparently ducked, and
@@ -402,19 +427,22 @@ void writeLED(bool state) { // used for note-off (green kept for any non-note us
 
 Voice* allocVoiceFree() { // pick a voice without note-matching (sequencers use this
                           // directly so two seqs on the same pitch never share a voice)
+	// only ever hand out voices within the current polyphony limit — voices above
+	// it stay silent (any note already ringing there just finishes on its own)
+	byte n = polyphony;
 	// a completely idle voice (envelope finished)
-	for (int i = 0; i < NUM_VOICES; i++) {
+	for (int i = 0; i < n; i++) {
 		if (!voices[i].active && !voices[i].env.playing()) return &voices[i];
 	}
 	// otherwise the oldest released-but-still-ringing tail
 	Voice* best = NULL;
-	for (int i = 0; i < NUM_VOICES; i++) {
+	for (int i = 0; i < n; i++) {
 		if (!voices[i].active && (!best || voices[i].age < best->age)) best = &voices[i];
 	}
 	if (best) return best;
-	// all four gates held: steal the oldest
+	// every voice in the limit is gated: steal the oldest
 	best = &voices[0];
-	for (int i = 1; i < NUM_VOICES; i++) {
+	for (int i = 1; i < n; i++) {
 		if (voices[i].age < best->age) best = &voices[i];
 	}
 	return best;
@@ -422,7 +450,7 @@ Voice* allocVoiceFree() { // pick a voice without note-matching (sequencers use 
 
 Voice* allocVoice(byte note) {
 	// same note still sounding: retrigger that voice instead of doubling it
-	for (int i = 0; i < NUM_VOICES; i++) {
+	for (int i = 0; i < polyphony; i++) {
 		if (voices[i].active && voices[i].note == note) return &voices[i];
 	}
 	return allocVoiceFree();
@@ -1018,7 +1046,7 @@ void savePreset(byte slot) {
 	p.lpfCutoff = lpfCutoff;     p.lpfRes = lpfRes;
 	p.mod_ratio = (byte)mod_ratio;
 	p.lfoDest = lfoDest;         p.lfoWaveSelect = lfoMode; // field reused as lfoMode
-	p.bit7 = bit7Mode;
+	p.bitDepth = bitDepth;
 	p.env2FM = env2FM;           p.env2Filt = env2Filt;
 	p.env2Ratio = env2Ratio;
 	p.polyFilt = polyFilter;
@@ -1031,6 +1059,7 @@ void savePreset(byte slot) {
 	p.rvSize = rvSize;           p.rvDamp = rvDamp;
 	p.rvMix = rvMix;             p.rvSpread = rvSpread;
 	p.oscVol = oscVol;           p.limThresh = limThresh;
+	p.polyphony = polyphony;     p.srDiv = (uint16_t)sampleRateDiv;
 	EEPROM.put(EE_PRESET_ADDR + slot * EE_PRESET_STRIDE, p);
 	EEPROM.commit(); // flash write: expect a tiny audio hiccup, same as a seq save
 	presetUsed[slot] = true;
@@ -1072,12 +1101,14 @@ bool loadPreset(byte slot) {
 	// presets saved before rvSpread existed carry garbage/NaN in this slot;
 	// fall back to natural width so they still load cleanly
 	if (!(rvSpread >= 0.0f && rvSpread <= 16.0f)) rvSpread = 1.0f;
-	bit7Mode = p.bit7;
+	bitDepth = constrain(p.bitDepth, 1, 16);
 	env2FM = p.env2FM;       env2Filt = p.env2Filt;
 	env2Ratio = p.env2Ratio;
 	e2Attack = p.e2Attack;   e2Decay = p.e2Decay;
 	e2Sustain = p.e2Sustain; e2Release = p.e2Release;
 	polyFilter = p.polyFilt;
+	polyphony = constrain(p.polyphony, 1, NUM_VOICES);
+	sampleRateDiv = constrain(p.srDiv, 1, MAX_SR_DIV);
 	for (int i = 0; i < NUM_VOICES; i++) {
 		voices[i].env2.setAttackTime(e2Attack);
 		voices[i].env2.setDecayTime(e2Decay);
@@ -1368,8 +1399,10 @@ void drawUI() {
 		lab[3] = "SPREAD"; snprintf(val[3], 16, "%.2f", rvSpread);
 		break;
 	case PG_HAXX:
-		lab[0] = "7BIT";   snprintf(val[0], 16, "%s", bit7Mode ? "ON" : "OFF");
-		lab[3] = "FILTER"; snprintf(val[3], 16, "%s", polyFilter ? "POLY" : "PARA");
+		lab[0] = "POLY";  snprintf(val[0], 16, "%u", polyphony);
+		lab[1] = "FILTER"; snprintf(val[1], 16, "%s", polyFilter ? "POLY" : "PARA");
+		lab[2] = "RATE";  snprintf(val[2], 16, "%uHz", MOZZI_AUDIO_RATE / sampleRateDiv);
+		lab[3] = "BITS";  snprintf(val[3], 16, "%u", bitDepth);
 		break;
 	case PG_PERF: { // MAIN's tone knobs + live scale-note playing
 		lab[0] = "FM/RAT";  snprintf(val[0], 16, "%ld/%d", fm_intensity, mod_ratio);
@@ -1706,7 +1739,7 @@ void updateControl() {
 		switch (pageState) {
 		case PG_MAIN:
 		case PG_PERF: // PERFORM shares MAIN's knob 1
-			if (buttStates[BTN_SHIFT]) mod_ratio = (val >> 6); // SHIFT: RATIO
+			if (buttStates[BTN_SHIFT]) mod_ratio = (int)(((uint32_t)val * (maxRatio + 1)) >> 10); // SHIFT: RATIO, 0..maxRatio
 			else                       fm_intensity = (float(val));
 			break;
 		case PG_ENV:
@@ -1734,7 +1767,8 @@ void updateControl() {
 			reverb.setRoomSize(rvSize);
 			break;
 		case PG_HAXX:
-			bit7Mode = (val >= 512); // knob as a switch: right half = crunch
+			polyphony = 1 + (byte)(((uint32_t)val * NUM_VOICES) >> 10); // 1..NUM_VOICES
+			if (polyphony > NUM_VOICES) polyphony = NUM_VOICES;
 			break;
 		case PG_SEQ:
 			if (buttStates[BTN_SHIFT]) { // SHIFT: gate length 0-100%, global for this sequencer
@@ -1807,7 +1841,9 @@ void updateControl() {
 			rvDamp = val / 1023.0f;
 			reverb.setDamp(rvDamp);
 			break;
-		// PG_HAXX knob 2 is now unused (OSC VOL moved to MAIN knob 4)
+		case PG_HAXX:
+			polyFilter = (val >= 512); // left = PARA (one filter), right = POLY (filter per voice)
+			break;
 		case PG_SEQ:
 			if (buttStates[BTN_SHIFT]) { // SHIFT: scale select, global for everything
 				scaleIdx = (byte)((val * NUM_SCALES) >> 10);
@@ -1868,7 +1904,19 @@ void updateControl() {
 		case PG_VERB:
 			rvMix = val / 1023.0f; // single wet/dry crossfade (applied every tick in the CV block)
 			break;
-		// PG_HAXX knob 3 is now unused (LIM THR moved to MAIN knob 4)
+		case PG_HAXX: { // sample-rate reducer: any integer divisor, not just powers of two.
+		                // left = minimum rate, right = maximum, with a dead zone at the top
+		                // that's pinned to divisor 1 (32768Hz, fully uncrushed) so "all the
+		                // way right" reliably lands on full resolution
+			if (val >= 1023 - SR_DEADZONE) {
+				sampleRateDiv = 1;
+			} else {
+				float t = (float)val / (float)(1023 - SR_DEADZONE); // 0(min rate)..~1(edge of dead zone)
+				int div = MAX_SR_DIV - (int)(t * (MAX_SR_DIV - 1) + 0.5f);
+				sampleRateDiv = constrain(div, 1, MAX_SR_DIV);
+			}
+			break;
+		}
 		case PG_SEQ:
 			if (buttStates[BTN_SHIFT]) { // SHIFT: clock divider for this sequencer
 				byte d = (byte)((val * 5) >> 10);
@@ -1947,8 +1995,9 @@ void updateControl() {
 			rvSpread = s * s * 8.0f; // 0 (mono) .. ~1 natural (~1/3 up) .. 8 (absurd)
 			break;
 		}
-		case PG_HAXX:
-			polyFilter = (val >= 512); // left = PARA (one filter), right = POLY (filter per voice)
+		case PG_HAXX: // bit-depth crush: left = extreme (1-bit), right = full 16-bit (off)
+			bitDepth = 1 + (byte)(((uint32_t)val * 16) >> 10);
+			if (bitDepth > 16) bitDepth = 16;
 			break;
 		case PG_SEQ:
 			if (buttStates[BTN_SHIFT]) { // SHIFT: part length 4..32
@@ -2122,7 +2171,7 @@ void updateControl() {
 			v.lpf.setCutoffFreq((uint16_t)c << 8);
 		}
 		int ratioNow = mod_ratio + (int)(((long)env2Ratio * e2v) >> 13); // ENV2 -> ratio, per voice
-		if (ratioNow > 15) ratioNow = 15;
+		if (ratioNow > maxRatio) ratioNow = maxRatio;
 		float f = v.freq;
 		if (offsetOn && lfoDest == 0) {
 			f += lfoOutput * modDepth; // the one LFO wobbles every voice in step
@@ -2173,8 +2222,9 @@ AudioOutput updateAudio() {
 	mix = (int32_t)(mix * oscVol); // H4XX page OSC VOL: >1.0 drives the output stage
 
 	int filtered = polyFilter ? mix : lpf.next(mix); // PARA: one filter on the sum, as ever
-	if (bit7Mode) {
-		filtered = (filtered >> 9) << 9; // crush to 128 levels — the old AVR resolution, reverb tail included
+	if (bitDepth < 16) { // H4XX BITS: zero the low bits, reverb tail included.
+		byte shift = 16 - bitDepth;  // bitDepth 7 => shift 9, same crush as the old 7BIT flag
+		filtered = (filtered >> shift) << shift;
 	}
 	// reverb input scaled by the wet/dry crossfade base (wet_ inside is fixed at 1).
 	// dry stays mono/centred; the stereo width lives entirely in the wet tail.
@@ -2201,8 +2251,18 @@ AudioOutput updateAudio() {
 	limGain += (gTarget - limGain) * LIM_GAIN_SLEW;
 	mL *= limGain; mR *= limGain;
 
-	return StereoOutput::fromNBit(17, (int)(softClip(mL) * 65535.0f),
-	                                 (int)(softClip(mR) * 65535.0f));
+	// H4XX RATE: sample-and-hold decimator. Mozzi's audio rate is fixed at compile
+	// time (every Oscil's phase math is templated on it), so this fakes a lower
+	// rate the same way real lo-fi hardware/plugins do: hold the last output for
+	// `sampleRateDiv` ticks before refreshing, which folds highs down as aliasing
+	// instead of actually resampling. Same gritty result, none of the retiming risk.
+	static float dsHeldL = 0, dsHeldR = 0;
+	static unsigned int dsCounter = 0;
+	if (dsCounter == 0) { dsHeldL = mL; dsHeldR = mR; dsCounter = sampleRateDiv; }
+	dsCounter--;
+
+	return StereoOutput::fromNBit(17, (int)(softClip(dsHeldL) * 65535.0f),
+	                                 (int)(softClip(dsHeldR) * 65535.0f));
 }
 
 void loop() {
