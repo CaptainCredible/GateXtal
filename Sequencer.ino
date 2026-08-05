@@ -210,28 +210,22 @@ void seqCheckButts() {
 void writeSeqToEeprom() {
 	allLedsOn();
 	for (byte i = 0; i < seqLength; i++) {
-		EEPROM.write(i, sequence[i]);
-		//Serial.print("Step ");
-		//Serial.print(i);
-		//Serial.print(" = ");
-		//Serial.println(sequence[i]);
+		//EEPROM.write(i, sequence[i]);
+		
 	}
-	EEPROM.write(120, seqLength);
+	//EEPROM.write(120, seqLength);
 
-	EEPROM.write(100, 123); //magic flag so we can tell if EEPROM contains a sequence or mumbo jumbo.
+	//EEPROM.write(100, 123); //magic flag so we can tell if EEPROM contains a sequence or mumbo jumbo.
 
 }
 
 void readSeqFromEeprom() {
 
-	seqLength = EEPROM.read(120); //we need to read seqlength first so we now how far to read EEPROM
+	//seqLength = EEPROM.read(120); //we need to read seqlength first so we now how far to read EEPROM
 
 	for (int i = 0; i < seqLength; i++) {
-		sequence[i] = EEPROM.read(i);
-		//Serial.print("Step ");
-		//Serial.print(i);
-		//Serial.print(" = ");
-		//Serial.println(sequence[i]);
+		//sequence[i] = EEPROM.read(i);
+		
 	}
 
 }
